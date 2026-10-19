@@ -15,7 +15,7 @@ public class UndoProperties
 
     /// <summary>
     /// One op: "Set" (a SetCell, one edit), "Batch" (an ApplyBatch of 0..6 edits; addresses may repeat, any case)
-    /// or "Save" (MarkSaved, no edits).
+    /// "Paste" (CopyPaste; Edits[0] = (source range, destination)) or "Save" (MarkSaved, no edits).
     /// </summary>
     public sealed record Op(string Kind, (string Address, string Input)[] Edits)
     {
@@ -28,9 +28,25 @@ public class UndoProperties
     private static readonly Gen<(string, string)> EditGen =
         Address.SelectMany(a => Gen.Elements(Inputs).Select(i => (a, i)));
 
+    private static readonly string[] Ranges = ["A1", "B2", "A1:A3", "A1:C1", "B1:C2", "A1:C3", "c3", "b2:a1"];
+
+    // Destinations are chosen so the pasted rectangle stays inside the pool (A1:C3), where the model observes it.
+    private static readonly Gen<Op> PasteGen =
+        Gen.Elements(Ranges).SelectMany(r =>
+        {
+            var rg = Gridline.Core.Addressing.RangeAddress.Parse(r);
+            var dests = Pool.Where(p =>
+            {
+                var a = Gridline.Core.Addressing.CellAddress.Parse(p);
+                return a.Row + rg.Rows - 1 <= 3 && a.Col + rg.Cols - 1 <= 3;
+            }).ToArray();
+            return Gen.Elements(dests).SelectMany(d => Gen.Elements(d, d.ToLowerInvariant())).Select(d => new Op("Paste", [(r, d)]));
+        });
+
     private static readonly Gen<Op> OpGen = Gen.Frequency(
         (4, EditGen.Select(e => new Op("Set", [e]))),
         (4, Gen.Choose(0, 6).SelectMany(n => Gen.ArrayOf(EditGen, n)).Select(es => new Op("Batch", es))),
+        (3, PasteGen),
         (1, Gen.Constant(new Op("Save", []))));
 
     private static readonly Gen<Op[]> OpsGen = Gen.Choose(0, 30).SelectMany(n => Gen.ArrayOf(OpGen, n));
@@ -40,6 +56,7 @@ public class UndoProperties
         switch (op.Kind)
         {
             case "Batch": wb.ApplyBatch(op.Edits.Select(e => KeyValuePair.Create(e.Address, e.Input)).ToArray()); break;
+            case "Paste": wb.CopyPaste(op.Edits[0].Address, op.Edits[0].Input); break;
             case "Set": wb.SetCell(op.Edits[0].Address, op.Edits[0].Input); break;
             default: wb.MarkSaved(); break;
         }

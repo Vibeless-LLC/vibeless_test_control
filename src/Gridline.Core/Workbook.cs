@@ -3,6 +3,7 @@ using Gridline.Core.Commands;
 using Gridline.Core.Dependencies;
 using Gridline.Core.Evaluation;
 using Gridline.Core.Functions;
+using Gridline.Core.Parsing;
 
 namespace Gridline.Core;
 
@@ -143,6 +144,52 @@ public sealed class Workbook
         }
         Commit(list, newNames: null, record: true);
     }
+
+    /// <summary>
+    /// Copies a cell or range to the same-sized rectangle at <paramref name="destinationTopLeft"/> as one undo step
+    /// (§9.4). The source is snapshotted first, so overlap is safe. Blank cells clear their destination; non-formula
+    /// inputs and formulas that are parse errors are copied verbatim; other formulas have their references shifted
+    /// by the offset and are re-emitted canonically (§5.5), even at offset zero. Throws
+    /// <see cref="ArgumentException"/> before changing anything if an address is invalid or the destination
+    /// rectangle exceeds the grid.
+    /// </summary>
+    public void CopyPaste(string sourceRange, string destinationTopLeft)
+    {
+        if (!RangeAddress.TryParse(sourceRange, out var src))
+            throw new ArgumentException($"Invalid range: '{sourceRange}'", nameof(sourceRange));
+        if (!CellAddress.TryParse(destinationTopLeft, out var dst))
+            throw new ArgumentException($"Invalid cell address: '{destinationTopLeft}'", nameof(destinationTopLeft));
+        int rows = src.Rows, cols = src.Cols;
+        if ((long)dst.Row + rows - 1 > MaxRows || (long)dst.Col + cols - 1 > MaxColumns)
+            throw new ArgumentException("Destination extends beyond the grid.", nameof(destinationTopLeft));
+
+        int dRow = dst.Row - src.TopLeft.Row, dCol = dst.Col - src.TopLeft.Col;
+        var pasted = new string[rows * cols];
+        for (int r = 0; r < rows; r++)
+        for (int c = 0; c < cols; c++)
+        {
+            int key = new CellAddress(src.TopLeft.Row + r, src.TopLeft.Col + c).Key;
+            string text = "";
+            if (_store.TryGet(key, out var cell))
+            {
+                text = cell.Input;
+                if (cell.Kind == CellKind.Formula && cell.Formula is { IsParseError: false, Root: { } root })
+                    text = FormulaPrinter.Print(ReferenceRewriter.Shift(root, dRow, dCol, out _), NameCasing);
+            }
+            pasted[r * cols + c] = text;
+        }
+
+        var edits = new List<CellEdit>(pasted.Length);
+        for (int r = 0; r < rows; r++)
+        for (int c = 0; c < cols; c++)
+        {
+            int key = new CellAddress(dst.Row + r, dst.Col + c).Key;
+            edits.Add(new CellEdit(key, CurrentInput(key), pasted[r * cols + c]));
+        }
+        Commit(edits, newNames: null, record: true);
+    }
+
+    private string? NameCasing(string upper) => _names.TryGetValue(upper, out var d) ? d.Name : null;
 
     /// <summary>True when there is a step to undo (§9.3).</summary>
     public bool CanUndo => _history.CanUndo;
