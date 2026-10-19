@@ -57,3 +57,11 @@ Non-trivial implementation choices, with spec section references.
 - **IF omitted branches (§7.2).** An omitted `t` (`IF(TRUE,,1)`) yields `0`; an omitted or absent `f` yields `FALSE`. Only the chosen branch is evaluated (`Arg` is lazy). The condition is coerced per §6.2, so `"x"` is `#VALUE!` and `"true"` is TRUE.
 - **AND/OR/XOR scan (§7.2).** Reference args contribute booleans and numbers only (text and blanks are ignored; the first error propagates); direct args use §6.2 coercion, so an omitted direct arg counts as FALSE. No logical value found gives `#VALUE!`. XOR is TRUE for an odd count of TRUE values.
 - **ISBLANK (§7.2)** is TRUE only for a single-cell reference (or a name bound to one) whose cell is blank; a range argument is FALSE.
+
+## Task 8: Text functions and Wildcard
+
+- **Wildcard (§7.3).** `IsMatch` matches the whole string; `Search` tries each start position >= start and matches a prefix of the rest (an empty match at `text.Length` counts, so `SEARCH("",t,LEN+1)` is `LEN+1`). Case-insensitive via `char.ToUpperInvariant`. A trailing lone `~` is a literal `~`. Iterative single-star backtracking, so pathological patterns are O(pattern*text) with no recursion; `IsMatch` is the entry point Phase 3 reuses.
+- **Optional integer arguments (§7.3, §6.9).** An omitted or absent optional argument takes its default (`LEFT`/`RIGHT` n=1, `FIND`/`SEARCH` s=1); required integer positions that are omitted coerce Blank to 0 (so `MID("abc",,1)` is `#VALUE!`).
+- **32,767 limit (§4.4).** Every text-producing function checks the result; `REPT` and `SUBSTITUTE` check before/while building so huge intermediates are never allocated. A result of exactly 32,767 is allowed.
+- **TEXTJOIN blanks.** With `ignore_empty` FALSE, blank cells in a range count as empty entries (delimiters are still emitted); they are accounted for from the sparse non-blank enumeration so a huge empty range is not scanned cell by cell. CONCAT skips blanks (they add nothing).
+- **Range errors** inside CONCAT/TEXTJOIN ranges propagate (first in row-major order).
