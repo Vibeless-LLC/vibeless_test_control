@@ -62,7 +62,7 @@ public sealed class ScriptTests : IDisposable
     }
 
     [Fact]
-    public void Script_Phase2CommandsNotImplemented() => Assert.Equal("ERR\tnot implemented\n", Run("UNDO\n", "script").stdout);
+    public void Script_Phase3CommandsNotImplemented() => Assert.Equal("ERR\tnot implemented\n", Run("NAMES\n", "script").stdout);
 
     [Fact]
     public void Script_SaveLoad()

@@ -12,8 +12,8 @@ internal sealed class ScriptRunner
     private readonly TextWriter _out;
     private bool _anyErr;
 
-    // Reserved for Phase 2 (BEGIN/END batching).
-    private bool _batchOpen = false;
+    // BEGIN/END batching (§10.3): SET/SETX lines are buffered while a batch is open.
+    private bool _batchOpen;
     private readonly List<KeyValuePair<string, string>> _pending = [];
 
     public ScriptRunner(Workbook wb, TextWriter output) { _wb = wb; _out = output; }
@@ -29,7 +29,7 @@ internal sealed class ScriptRunner
             try { Execute(line); }
             catch (Exception ex) when (ex is not OutOfMemoryException) { Err(ex.Message); }
         }
-        _ = _batchOpen; _ = _pending;
+        if (_batchOpen) { _batchOpen = false; _pending.Clear(); Err("unterminated BEGIN"); }
         return !_anyErr;
     }
 
@@ -44,8 +44,42 @@ internal sealed class ScriptRunner
         int sp = line.IndexOf(' ');
         string cmd = (sp < 0 ? line : line[..sp]).ToUpperInvariant();
         string rest = sp < 0 ? "" : line[(sp + 1)..];
+        if (_batchOpen && cmd is not ("SET" or "SETX" or "END" or "BEGIN"))
+        {
+            Err("command not allowed inside BEGIN: " + cmd);
+            return;
+        }
         switch (cmd)
         {
+            case "BEGIN":
+                if (_batchOpen) Err("BEGIN while a batch is open");
+                else _batchOpen = true;
+                break;
+            case "END":
+            {
+                if (!_batchOpen) { Err("END without BEGIN"); break; }
+                var edits = _pending.ToArray();
+                _batchOpen = false;
+                _pending.Clear();
+                _wb.ApplyBatch(edits);
+                break;
+            }
+            case "UNDO":
+                _out.Write(_wb.Undo() ? "OK\n" : "NOOP\n");
+                break;
+            case "REDO":
+                _out.Write(_wb.Redo() ? "OK\n" : "NOOP\n");
+                break;
+            case "DIRTY":
+                _out.Write(_wb.IsDirty ? "TRUE\n" : "FALSE\n");
+                break;
+            case "PASTE":
+            {
+                var parts = rest.Split(' ');
+                if (parts.Length != 2) { Err("PASTE requires <srcRange> <dstAddr>"); break; }
+                _wb.CopyPaste(parts[0], parts[1]);
+                break;
+            }
             case "SET":
             case "SETX":
             {
@@ -54,7 +88,8 @@ internal sealed class ScriptRunner
                 string input = sp2 < 0 ? "" : rest[(sp2 + 1)..];
                 if (!TryAddr(addrText, out var a)) return;
                 if (cmd == "SETX") input = Escaping.Unescape(input);
-                _wb.SetCell(a, input);
+                if (_batchOpen) _pending.Add(new(a, input));
+                else _wb.SetCell(a, input);
                 break;
             }
             case "GET":
@@ -79,12 +114,12 @@ internal sealed class ScriptRunner
             case "SAVE":
                 if (rest.Length == 0) { Err("SAVE requires a path"); break; }
                 GridlineFile.SaveToPath(_wb, rest);
+                _wb.MarkSaved();
                 break;
             case "LOAD":
                 if (rest.Length == 0) { Err("LOAD requires a path"); break; }
                 _wb = GridlineFile.LoadFromPath(rest);
                 break;
-            case "UNDO": case "REDO": case "BEGIN": case "END": case "PASTE": case "DIRTY":
             case "INSERTROWS": case "DELETEROWS": case "INSERTCOLS": case "DELETECOLS":
             case "NAME": case "UNNAME": case "NAMES":
                 Err("not implemented");
