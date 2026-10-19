@@ -26,7 +26,7 @@ internal static class TextFunctions
         Add(r, "REPLACE", 4, 4, Replace);
         Add(r, "REPT", 2, 2, Rept);
         Add(r, "EXACT", 2, 2, a => WithText(a[0], x => WithText(a[1], y => CellValue.FromBoolean(string.Equals(x, y, StringComparison.Ordinal)))));
-        Add(r, "VALUE", 1, 1, a => Coercion.ToNumber(a[0].Evaluate()));
+        Add(r, "VALUE", 1, 1, a => Coercion.ToNumber(ArgGuard.Required(a[0])));
     }
 
     private static void Add(FunctionRegistry r, string name, int min, int max, Func<IReadOnlyList<Arg>, CellValue> f) =>
@@ -37,14 +37,23 @@ internal static class TextFunctions
 
     private static CellValue WithText(Arg a, Func<string, CellValue> f)
     {
-        var t = Coercion.ToText(a.Evaluate());
+        var t = Coercion.ToText(ArgGuard.Required(a));
         return t.Kind == ValueKind.Error ? t : f(t.Text);
     }
 
-    /// <summary>Integer argument; an omitted/absent optional argument yields <paramref name="dflt"/>.</summary>
-    private static bool TryInt(IReadOnlyList<Arg> a, int index, int dflt, out int value, out CellValue error)
+    /// <summary>
+    /// Integer argument. An omitted/absent argument yields <paramref name="dflt"/> when one is given; otherwise an
+    /// omitted argument is #VALUE! (§5.3).
+    /// </summary>
+    private static bool TryInt(IReadOnlyList<Arg> a, int index, int? dflt, out int value, out CellValue error)
     {
-        if (index >= a.Count || a[index].IsOmitted) { value = dflt; error = default; return true; }
+        if (index >= a.Count || a[index].IsOmitted)
+        {
+            if (dflt is { } d) { value = d; error = default; return true; }
+            value = 0;
+            error = CellValue.FromError(ErrorCodes.Value);
+            return false;
+        }
         return Coercion.TryToInt(a[index].Evaluate(), out value, out error);
     }
 
@@ -86,8 +95,8 @@ internal static class TextFunctions
     private static CellValue Mid(IReadOnlyList<Arg> a) =>
         WithText(a[0], t =>
         {
-            if (!TryInt(a, 1, 0, out int s, out var e1)) return e1;
-            if (!TryInt(a, 2, 0, out int n, out var e2)) return e2;
+            if (!TryInt(a, 1, null, out int s, out var e1)) return e1;
+            if (!TryInt(a, 2, null, out int n, out var e2)) return e2;
             if (s < 1 || n < 0) return CellValue.FromError(ErrorCodes.Value);
             if (s > t.Length) return CellValue.FromText("");
             int start = s - 1;
@@ -139,6 +148,7 @@ internal static class TextFunctions
             }
             else
             {
+                if (a.IsOmitted) continue; // variadic position: an omitted argument is absent
                 var v = a.Evaluate();
                 if (v.Kind == ValueKind.Error) return v;
                 var t = Coercion.ToText(v).Text;
@@ -151,16 +161,16 @@ internal static class TextFunctions
 
     private static CellValue TextJoin(IReadOnlyList<Arg> a)
     {
-        var d = Coercion.ToText(a[0].Evaluate());
+        var d = Coercion.ToText(ArgGuard.Required(a[0]));
         if (d.Kind == ValueKind.Error) return d;
-        var ig = Coercion.ToBoolean(a[1].Evaluate());
+        var ig = Coercion.ToBoolean(ArgGuard.Required(a[1]));
         if (ig.Kind == ValueKind.Error) return ig;
         return Join(a, 2, d.Text, ig.Boolean, sparseBlanks: true);
     }
 
     private static CellValue Find(IReadOnlyList<Arg> a, bool wildcard)
     {
-        var f = Coercion.ToText(a[0].Evaluate());
+        var f = Coercion.ToText(ArgGuard.Required(a[0]));
         if (f.Kind == ValueKind.Error) return f;
         return WithText(a[1], t =>
         {
@@ -211,8 +221,8 @@ internal static class TextFunctions
     private static CellValue Replace(IReadOnlyList<Arg> a) =>
         WithText(a[0], t =>
         {
-            if (!TryInt(a, 1, 0, out int s, out var e1)) return e1;
-            if (!TryInt(a, 2, 0, out int n, out var e2)) return e2;
+            if (!TryInt(a, 1, null, out int s, out var e1)) return e1;
+            if (!TryInt(a, 2, null, out int n, out var e2)) return e2;
             if (s < 1 || n < 0) return CellValue.FromError(ErrorCodes.Value);
             return WithText(a[3], rep =>
             {
@@ -225,7 +235,7 @@ internal static class TextFunctions
     private static CellValue Rept(IReadOnlyList<Arg> a) =>
         WithText(a[0], t =>
         {
-            if (!TryInt(a, 1, 0, out int n, out var err)) return err;
+            if (!TryInt(a, 1, null, out int n, out var err)) return err;
             if (n < 0) return CellValue.FromError(ErrorCodes.Value);
             if (t.Length == 0 || n == 0) return CellValue.FromText("");
             if ((long)t.Length * n > MaxText) return CellValue.FromError(ErrorCodes.Value);

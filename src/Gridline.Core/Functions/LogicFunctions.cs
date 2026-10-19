@@ -13,18 +13,18 @@ internal static class LogicFunctions
         Add(r, "XOR", 1, 255, a => Logical(a, (t, f) => (t & 1) == 1));
         Add(r, "NOT", 1, 1, a =>
         {
-            var b = Coercion.ToBoolean(a[0].Evaluate());
+            var b = Coercion.ToBoolean(ArgGuard.Required(a[0]));
             return b.Kind == ValueKind.Error ? b : CellValue.FromBoolean(!b.Boolean);
         });
         Add(r, "IFERROR", 2, 2, a =>
         {
-            var v = a[0].Evaluate();
-            return v.Kind == ValueKind.Error ? a[1].Evaluate() : v;
+            var v = ArgGuard.Required(a[0]);
+            return v.Kind == ValueKind.Error && !a[0].IsOmitted ? ArgGuard.Required(a[1]) : v;
         });
         Add(r, "IFNA", 2, 2, a =>
         {
-            var v = a[0].Evaluate();
-            return v.Kind == ValueKind.Error && v.Error == ErrorCodes.NA ? a[1].Evaluate() : v;
+            var v = ArgGuard.Required(a[0]);
+            return v.Kind == ValueKind.Error && v.Error == ErrorCodes.NA && !a[0].IsOmitted ? ArgGuard.Required(a[1]) : v;
         });
         Add(r, "ISBLANK", 1, 1, a =>
             CellValue.FromBoolean(a[0].IsReference && !a[0].IsRange && a[0].Evaluate().Kind == ValueKind.Blank));
@@ -39,11 +39,11 @@ internal static class LogicFunctions
         r.Register(name, min, max, new DelegateFunction((a, _) => f(a)));
 
     private static void Is(FunctionRegistry r, string name, Func<CellValue, bool> test) =>
-        Add(r, name, 1, 1, a => CellValue.FromBoolean(test(a[0].Evaluate())));
+        Add(r, name, 1, 1, a => a[0].IsOmitted ? CellValue.FromError(ErrorCodes.Value) : CellValue.FromBoolean(test(a[0].Evaluate())));
 
     private static CellValue If(IReadOnlyList<Arg> a)
     {
-        var c = Coercion.ToBoolean(a[0].Evaluate());
+        var c = Coercion.ToBoolean(ArgGuard.Required(a[0]));
         if (c.Kind == ValueKind.Error) return c;
         if (c.Boolean)
             return a[1].IsOmitted ? CellValue.FromNumber(0) : a[1].Evaluate();
@@ -71,6 +71,7 @@ internal static class LogicFunctions
             }
             else
             {
+                if (a.IsOmitted) continue; // variadic position: an omitted argument is absent
                 var b = Coercion.ToBoolean(a.Evaluate());
                 if (b.Kind == ValueKind.Error) return b;
                 found++;

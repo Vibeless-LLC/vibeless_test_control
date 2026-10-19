@@ -15,6 +15,13 @@ public class MathFunctionTests
     [InlineData("ROUND(1E+300,2)", "N:1E+300")] [InlineData("ROUND(0,2)", "N:0")]
     public void Direct(string f, string e) => Assert.Equal(e, CoreTestHost.Eval("=" + f));
 
+    [Theory]
+    [InlineData("ROUND(1.5,)", "E:#VALUE!")] [InlineData("ROUND(,1)", "E:#VALUE!")] [InlineData("ROUNDUP(1.5,)", "E:#VALUE!")] [InlineData("ROUNDDOWN(,1)", "E:#VALUE!")] [InlineData("MOD(5,)", "E:#VALUE!")] [InlineData("MOD(,5)", "E:#VALUE!")]
+    [InlineData("POWER(2,)", "E:#VALUE!")] [InlineData("POWER(,2)", "E:#VALUE!")]
+    [InlineData("AVERAGE(1,)", "N:1")] [InlineData("SUM(,1)", "N:1")] [InlineData("PRODUCT(2,,3)", "N:6")] [InlineData("MIN(,5)", "N:5")] [InlineData("SUMPRODUCT(,2)", "N:2")] [InlineData("SUMPRODUCT(,)", "N:0")] [InlineData("COUNT(,1)", "N:1")] [InlineData("COUNTA(,1)", "N:1")]
+    public void OmittedArgs(string f, string e) => Assert.Equal(e, CoreTestHost.Eval("=" + f));
+
+
     [Fact] public void Agg_ReferenceIgnoresTextBoolBlank() => Assert.Equal("N:5", CoreTestHost.Eval("=SUM(A1:A4)", ("A1","5"), ("A2","'7"), ("A3","TRUE")));
     [Fact] public void Agg_ReferenceErrorPropagates() => Assert.Equal("E:#DIV/0!", CoreTestHost.Eval("=SUM(A1:A2)", ("A1","5"), ("A2","=1/0")));
     [Fact] public void Average_NoNumbers() => Assert.Equal("E:#DIV/0!", CoreTestHost.Eval("=AVERAGE(A1:A3)"));

@@ -23,6 +23,28 @@ public class TextFunctionTests
     [InlineData("LEN(1/0)", "E:#DIV/0!")] [InlineData("VALUE(5)", "N:5")] [InlineData("TRIM(NOPE)", "E:#NAME?")]
     public void Direct(string f, string e) => Assert.Equal(e, CoreTestHost.Eval("=" + f));
 
+    [Theory]
+    [InlineData("MID(\"abc\",2,)", "E:#VALUE!")] [InlineData("MID(\"abc\",,1)", "E:#VALUE!")] [InlineData("REPLACE(\"abc\",2,,\"X\")", "E:#VALUE!")] [InlineData("REPLACE(\"abc\",,1,\"X\")", "E:#VALUE!")] [InlineData("REPLACE(\"abc\",1,1,)", "E:#VALUE!")]
+    [InlineData("REPT(\"a\",)", "E:#VALUE!")] [InlineData("REPT(,2)", "E:#VALUE!")] [InlineData("FIND(,\"abc\")", "E:#VALUE!")] [InlineData("FIND(\"a\",)", "E:#VALUE!")] [InlineData("SEARCH(,\"abc\")", "E:#VALUE!")]
+    [InlineData("SUBSTITUTE(\"a\",,\"b\")", "E:#VALUE!")] [InlineData("SUBSTITUTE(\"a\",\"a\",)", "E:#VALUE!")] [InlineData("SUBSTITUTE(,\"a\",\"b\")", "E:#VALUE!")]
+    [InlineData("EXACT(,\"a\")", "E:#VALUE!")] [InlineData("EXACT(\"a\",)", "E:#VALUE!")] [InlineData("UPPER(,)", "E:#PARSE!")] [InlineData("LEFT(,1)", "E:#VALUE!")]
+    // Optional positions keep their defaults when omitted.
+    [InlineData("LEFT(\"abc\",)", "T:a")] [InlineData("RIGHT(\"abc\",)", "T:c")] [InlineData("FIND(\"b\",\"abc\",)", "N:2")] [InlineData("SEARCH(\"b\",\"abc\",)", "N:2")] [InlineData("SUBSTITUTE(\"aa\",\"a\",\"b\",)", "T:bb")]
+    // Variadic: omitted is absent.
+    [InlineData("CONCAT(,\"a\",)", "T:a")] [InlineData("TEXTJOIN(\",\",TRUE,,\"a\",\"b\")", "T:a,b")] [InlineData("TEXTJOIN(,TRUE,\"a\",\"b\")", "E:#VALUE!")] [InlineData("TEXTJOIN(\",\",,\"a\")", "E:#VALUE!")]
+    [InlineData("VALUE()", "E:#PARSE!")] [InlineData("SEARCH(\"b*d\",\"abcd\")", "N:2")] [InlineData("SEARCH(\"?c\",\"abc\")", "N:2")] [InlineData("SEARCH(\"~**\",\"a*b\")", "N:2")]
+    [InlineData("SEARCH(\"a*?c\",\"xabbc\")", "N:2")] [InlineData("SEARCH(\"a*b?d\",\"aabxd abcd\")", "N:1")] [InlineData("SEARCH(\"*c\",\"abc\")", "N:1")] [InlineData("SEARCH(\"a*\",\"bab\")", "N:2")] [InlineData("SEARCH(\"b*z\",\"abc\")", "E:#VALUE!")]
+    [InlineData("SEARCH(\"a**c\",\"abc\")", "N:1")] [InlineData("SEARCH(\"c*\",\"abc\",3)", "N:3")]
+    public void OmittedArgsAndSearchShapes(string f, string e) => Assert.Equal(e, CoreTestHost.Eval("=" + f));
+
+    [Fact] public void Search_PathologicalStarsAreFast()
+    {
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        Assert.Equal("E:#VALUE!", CoreTestHost.Eval("=SEARCH(\"a*a*a*a*b\",REPT(\"a\",32767))"));
+        Assert.True(sw.Elapsed < TimeSpan.FromSeconds(2), sw.Elapsed.ToString());
+        Assert.Equal(-1, Wildcard.Search("a*a*a*a*b", new string('a', 32767), 0));
+    }
+
     [Fact] public void Concat_RangeRowMajorBlanksEmpty() => Assert.Equal("T:abc", CoreTestHost.Eval("=CONCAT(A1:B2)", ("A1","a"), ("B1","b"), ("B2","c")));
     [Fact] public void TextJoin_IgnoreEmpty() { Assert.Equal("T:a,c", CoreTestHost.Eval("=TEXTJOIN(\",\",TRUE,A1:A3)", ("A1","a"), ("A3","c"))); Assert.Equal("T:a,,c", CoreTestHost.Eval("=TEXTJOIN(\",\",FALSE,A1:A3)", ("A1","a"), ("A3","c"))); }
     [Fact] public void TextJoin_TrailingBlanksAndEmptyText() { Assert.Equal("T:a,,", CoreTestHost.Eval("=TEXTJOIN(\",\",FALSE,A1:A3)", ("A1","a"))); Assert.Equal("T:a", CoreTestHost.Eval("=TEXTJOIN(\",\",TRUE,A1:A3)", ("A1","a"), ("A2","=\"\""))); Assert.Equal("T:a,", CoreTestHost.Eval("=TEXTJOIN(\",\",FALSE,A1:A2)", ("A1","a"), ("A2","=\"\""))); }

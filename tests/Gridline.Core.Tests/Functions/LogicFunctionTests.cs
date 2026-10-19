@@ -12,6 +12,12 @@ public class LogicFunctionTests
     [InlineData("ISNA(#N/A)", "B:TRUE")] [InlineData("ISERROR(1)", "B:FALSE")] [InlineData("ISNUMBER(1)", "B:TRUE")] [InlineData("ISLOGICAL(FALSE)", "B:TRUE")] [InlineData("ISTEXT(1)", "B:FALSE")] [InlineData("ISBLANK(1)", "B:FALSE")]
     public void Direct(string f, string e) => Assert.Equal(e, CoreTestHost.Eval("=" + f));
 
+    [Theory]
+    [InlineData("IF(,1,2)", "E:#VALUE!")] [InlineData("NOT()", "E:#PARSE!")] [InlineData("IFERROR(,1)", "E:#VALUE!")] [InlineData("IFERROR(1/0,)", "E:#VALUE!")] [InlineData("IFERROR(1,)", "N:1")] [InlineData("IFNA(,1)", "E:#VALUE!")] [InlineData("IFNA(#N/A,)", "E:#VALUE!")]
+    [InlineData("AND(,TRUE)", "B:TRUE")] [InlineData("OR(,FALSE,)", "B:FALSE")] [InlineData("XOR(,TRUE)", "B:TRUE")] [InlineData("AND(,)", "E:#VALUE!")]
+    [InlineData("IF(TRUE,,1)", "N:0")] [InlineData("IF(FALSE,1,)", "B:FALSE")]
+    public void OmittedArgs(string f, string e) => Assert.Equal(e, CoreTestHost.Eval("=" + f));
+
     [Fact] public void AndOr_RefIgnoresTextAndBlank() { Assert.Equal("B:TRUE", CoreTestHost.Eval("=AND(A1:A3)", ("A1","TRUE"), ("A2","'x"))); Assert.Equal("E:#VALUE!", CoreTestHost.Eval("=OR(A1:A2)", ("A1","'x"))); Assert.Equal("B:TRUE", CoreTestHost.Eval("=OR(A1)", ("A1","2"))); }
     [Fact] public void IsBlank_TrueOnlyForTrulyBlankRef() { Assert.Equal("B:TRUE", CoreTestHost.Eval("=ISBLANK(A1)")); Assert.Equal("B:FALSE", CoreTestHost.Eval("=ISBLANK(A1)", ("A1","=\"\""))); }
     [Fact] public void IsFunctions_NeverError() => Assert.Equal("B:FALSE", CoreTestHost.Eval("=ISNUMBER(A1:A2)"));

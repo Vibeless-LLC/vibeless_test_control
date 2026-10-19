@@ -24,6 +24,7 @@ internal static class Aggregation
             }
             else
             {
+                if (a.IsOmitted) continue; // variadic position: an omitted argument is absent
                 var n = Coercion.ToNumber(a.Evaluate());
                 if (n.Kind == ValueKind.Error) return n;
                 into.Add(n.Number);

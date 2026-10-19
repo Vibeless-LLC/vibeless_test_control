@@ -45,13 +45,13 @@ internal static class MathFunctions
         Add(r, name, 2, 2, a =>
             WithNumber(a[0], n =>
             {
-                if (!Coercion.TryToInt(a[1].Evaluate(), out int digits, out var err)) return err;
+                if (!Coercion.TryToInt(ArgGuard.Required(a[1]), out int digits, out var err)) return err;
                 return CellValue.FromNumber(Rounding.Round(n, digits, mode));
             }));
 
     private static CellValue WithNumber(Arg a, Func<double, CellValue> f)
     {
-        var n = Coercion.ToNumber(a.Evaluate());
+        var n = Coercion.ToNumber(ArgGuard.Required(a));
         return n.Kind == ValueKind.Error ? n : f(n.Number);
     }
 
@@ -123,6 +123,7 @@ internal static class MathFunctions
         CellValue firstError = default;
         foreach (var a in args)
         {
+            if (a.IsOmitted) continue; // variadic position: an omitted argument is absent
             var map = new Dictionary<(int, int), double>();
             int r, c;
             if (a.Range is { } range)
@@ -147,6 +148,7 @@ internal static class MathFunctions
             maps.Add(map);
         }
         if (firstError.Kind == ValueKind.Error) return firstError;
+        if (maps.Count == 0) return CellValue.FromNumber(0);
 
         var smallest = maps[0];
         foreach (var m in maps) if (m.Count < smallest.Count) smallest = m;
