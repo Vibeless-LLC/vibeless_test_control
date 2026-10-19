@@ -93,4 +93,12 @@ Non-trivial implementation choices, with spec section references.
 - **Version (§8.2).** Accepted only if a JSON number that `TryGetInt64` accepts (so `1.5`, `1.0`, `1e0` and `"1"` are all rejected). `version > 1` gives a message containing `unsupported version`; `version < 1` gives `GridlineFormatException` ("invalid version").
 - **Names in Phase 1 (§8.2).** Entries of `names` are passed to `Workbook.FromSnapshot`, which rejects any in Phase 1; the `ArgumentException` is wrapped as `GridlineFormatException`.
 - **Save (§8.4).** Temp file `path.<guid>.tmp` in the target directory (`FileMode.CreateNew`), `Flush(flushToDisk: true)`, `File.Move(tmp, path, overwrite: true)`; the temp is deleted best-effort on failure.
-- **Undecodable strings and BOM (§8.2).** Any InvalidOperationException from System.Text.Json (invalid UTF-8 inside a string, lone-surrogate escapes in a name or ormat) is wrapped as GridlineFormatException. Property names and ormat go through the same tolerant unescaping as values, so a lone-surrogate name or format is handled like any other string. A leading UTF-8 BOM is skipped on load (lenient reading); the writer never emits one.
+- **Undecodable strings and BOM (§8.2).** Any InvalidOperationException from System.Text.Json (invalid UTF-8 inside a string, lone-surrogate escapes in a name or format) is wrapped as GridlineFormatException. Property names and format go through the same tolerant unescaping as values, so a lone-surrogate name or format is handled like any other string. A leading UTF-8 BOM is skipped on load (lenient reading); the writer never emits one.
+
+## Task 12: CLI Phase 1
+
+- **Unknown escapes in SETX (§10.3).** `Unescape` handles `\`, `\t`, `\n`, `\r`; any other backslash sequence (and a trailing lone backslash) is left verbatim.
+- **Exit codes for set (§10.1).** `set` loads the file first (missing 2, format 3), then validates the address (invalid 5). Input over 32,767 UTF-16 units gives exit 1 (usage). `eval` validates all addresses before loading the file, so an invalid address gives 5 even for a missing file.
+- **Script input (§10.3).** stdin is read whole and split on `\n` only (a trailing `\r` is stripped per line), so a lone CR inside an input is preserved. Errors in SAVE/LOAD print an ERR line and the script continues; a failing LOAD keeps the current workbook.
+- **ERR text (§10.3).** Messages are free-form, with tab/CR/LF replaced by spaces so each ERR is one line with exactly one tab.
+- **Script command word and address** are case-insensitive; addresses are echoed in canonical form.
