@@ -48,6 +48,9 @@ public class EvaluatorTests
         ["PROBE"] = new Fn((args, _) => CellValue.FromText(string.Join(",", args.Select(a =>
             a.IsOmitted ? "O" :
             (a.IsReference ? "R" : "D") + (a.Range is { } r ? $"{r.Rows}x{r.Cols}" : "-") + (a.IsRange ? "*" : ""))))),
+        // TRUE iff every arg satisfies IsReference <=> Range != null, and IsRange => IsReference.
+        ["INV"] = new Fn((args, _) => CellValue.FromBoolean(args.All(a =>
+            a.IsReference == (a.Range is not null) && (!a.IsRange || a.IsReference) && (!a.IsOmitted || !a.IsReference)))),
         ["ECHO"] = new Fn((args, _) => args[0].Evaluate()),
         ["TICK"] = new Fn((_, _) => CellValue.FromNumber(++_ticks)),
         ["TWICE"] = new Fn((args, _) => { args[0].Evaluate(); return args[0].Evaluate(); }),
@@ -136,8 +139,15 @@ public class EvaluatorTests
 
     [Fact]
     public void ArgShapes() =>
-        Assert.Equal("T:R1x1,R2x3*,D-,O,R2x2*,R1x1,R-,R1x1,D-,R2x2*",
+        Assert.Equal("T:R1x1,R2x3*,D-,O,R2x2*,R1x1,D-,R1x1,D-,R2x2*",
             EvalIn(WithNames(), "PROBE(A1,C3:A2,1+1,,Rng,Cell,Nope,(A1),A1+0,((C3:D4)))"));
+
+    [Fact]
+    public void ArgInvariantReferenceHasRange() =>
+        Assert.Equal("B:TRUE", EvalIn(WithNames(), "INV(A1,C3:A2,1+1,,Rng,Cell,Nope,(A1),A1+0,((C3:D4)),(Nope),\"x\",FOO(1))"));
+
+    [Fact] public void ArgUndefinedNameParenthesized() => Assert.Equal("E:#NAME?", Eval("ECHO((Nope))"));
+    [Fact] public void ArgNameToCellValue() => Assert.Equal("N:3", EvalIn(WithNames(), "ECHO(Cell)", ("C3", CellValue.FromNumber(3))));
 
     [Fact] public void ArgOmittedOnly() => Assert.Equal("T:O,O", Eval("PROBE(,)"));
     [Fact] public void ArgNoArgs() => Assert.Equal("T:", Eval("PROBE()"));
@@ -181,7 +191,6 @@ public class EvaluatorTests
     {
         string f = "1" + string.Concat(Enumerable.Repeat("+1", 15999));
         string r = Eval(f);
-        Assert.True(r is "N:16000" or "E:#VALUE!", r);
         Assert.Equal("N:16000", r); // preferred: the left spine is evaluated iteratively
     }
 

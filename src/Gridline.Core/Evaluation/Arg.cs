@@ -14,6 +14,7 @@ internal sealed class Arg
     private readonly IEvalContext _ctx;
     private CellValue _value;
     private bool _evaluated;
+    private readonly bool _isName;
 
     internal Arg(Node? node, Evaluator evaluator, IEvalContext ctx)
     {
@@ -39,9 +40,11 @@ internal sealed class Arg
                 Range = new RangeRef(Evaluator.Normalize(rn), ctx);
                 break;
             case NameNode nn:
-                IsReference = true;
+                // An undefined name is not a reference: it has no cells, and its value is #NAME?.
+                _isName = true;
                 if (ctx.TryResolveName(nn.Name, out var target, out bool isRange))
                 {
+                    IsReference = true;
                     IsRange = isRange;
                     Range = new RangeRef(target, ctx);
                 }
@@ -52,7 +55,10 @@ internal sealed class Arg
     /// <summary>The argument position was left empty, as in <c>IF(A1,,3)</c>.</summary>
     public bool IsOmitted => _node is null;
 
-    /// <summary>A cell reference, range reference or name, possibly parenthesized (§7.0). Includes undefined names.</summary>
+    /// <summary>
+    /// A cell reference, range reference or defined name, possibly parenthesized (§7.0).
+    /// Invariant: <c>IsReference</c> ⇔ <see cref="Range"/> is non-null. An undefined name is not a reference.
+    /// </summary>
     public bool IsReference { get; }
 
     /// <summary>A range reference, or a name bound to a range.</summary>
@@ -72,9 +78,16 @@ internal sealed class Arg
     {
         if (!_evaluated)
         {
-            _value = _node is null ? CellValue.Blank : _evaluator.EvalScalar(_node, _ctx);
+            _value = _node is null ? CellValue.Blank
+                : _isName ? EvaluateName() // reuse the ctor's resolution so shape and value agree
+                : _evaluator.EvalScalar(_node, _ctx);
             _evaluated = true;
         }
         return _value;
     }
+
+    private CellValue EvaluateName() =>
+        Range is null ? CellValue.FromError(ErrorCodes.Name)
+        : IsRange ? CellValue.FromError(ErrorCodes.Value)
+        : Range.Get(0, 0);
 }
