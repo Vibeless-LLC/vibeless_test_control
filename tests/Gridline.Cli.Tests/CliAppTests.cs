@@ -60,6 +60,22 @@ public sealed class CliAppTests : IDisposable
     }
 
     [Fact]
+    public void Eval_FileWithNames()
+    {
+        var p = P("names.gridline");
+        File.WriteAllText(p, "{\"format\":\"gridline\",\"version\":1,\"names\":{\"Rate\":\"$B$1\",\"Total\":\"$B$1:$B$3\"},"
+            + "\"cells\":[[\"A1\",\"=Rate*2\"],[\"A2\",\"=SUM(Total)\"],[\"A3\",\"=Total\"],[\"A4\",\"=Nope\"],[\"B1\",\"5\"],[\"B2\",\"6\"]]}");
+        var r = Run("", "eval", p, "--all");
+        Assert.Equal(0, r.code);
+        Assert.Equal("A1\tN:10\nB1\tN:5\nA2\tN:11\nB2\tN:6\nA3\tE:#VALUE!\nA4\tE:#NAME?\n", r.stdout);
+
+        // set keeps the names (§8.1 round trip).
+        Assert.Equal(0, Run("", "set", p, "B1", "1").code);
+        Assert.Contains("  \"names\": {\n    \"Rate\": \"$B$1\",\n    \"Total\": \"$B$1:$B$3\"\n  },\n", File.ReadAllText(p));
+        Assert.Equal("A1\tN:2\n", Run("", "eval", p, "A1").stdout);
+    }
+
+    [Fact]
     public void Eval_MissingFile_Exit2()
     {
         var r = Run("", "eval", P("nope.gridline"), "A1");

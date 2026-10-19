@@ -28,8 +28,8 @@ public class WorkbookTests
     {
         Assert.Throws<ArgumentException>(() => Workbook.FromSnapshot(new[] { KeyValuePair.Create("A0", "1") }, []));
         Assert.Throws<ArgumentException>(() => Workbook.FromSnapshot(new[] { KeyValuePair.Create("A1", new string('x', 32768)) }, []));
-        var ex = Assert.Throws<ArgumentException>(() => Workbook.FromSnapshot([], new[] { KeyValuePair.Create("Rate", "A1") }));
-        Assert.Contains("names are not supported yet", ex.Message);
+        // refersTo must be fully absolute (§9.6).
+        Assert.Throws<ArgumentException>(() => Workbook.FromSnapshot([], new[] { KeyValuePair.Create("Rate", "A1") }));
     }
 
     [Fact]

@@ -56,6 +56,66 @@ public class GridlineFileTests
         Assert.Equal(bytes, GridlineFile.SerializeToUtf8(GridlineFile.Load(bytes)));
     }
 
+    /// <summary>The §8.1 layout example, verbatim (LF, trailing newline).</summary>
+    private const string SpecExample = """
+        {
+          "format": "gridline",
+          "version": 1,
+          "names": {
+            "Rate": "$B$1",
+            "Total": "$A$1:$A$10"
+          },
+          "cells": [
+            ["A1", "=SUM(B1:B3)*Rate"],
+            ["B1", "5"],
+            ["A2", "hello \"world\""]
+          ]
+        }
+
+        """;
+
+    private static byte[] SpecExampleBytes() => Encoding.UTF8.GetBytes(SpecExample.ReplaceLineEndings("\n"));
+
+    [Fact]
+    public void Load_SpecExample_SaveByteIdentical()
+    {
+        var bytes = SpecExampleBytes();
+        Assert.Equal((byte)'\n', bytes[^1]);
+        var wb = GridlineFile.Load(bytes);
+        Assert.Equal(bytes, GridlineFile.SerializeToUtf8(wb));
+    }
+
+    [Fact]
+    public void Load_SpecExample_NamesAndValues()
+    {
+        var wb = GridlineFile.Load(SpecExampleBytes());
+        Assert.Equal(new[] { KeyValuePair.Create("Rate", "$B$1"), KeyValuePair.Create("Total", "$A$1:$A$10") }, wb.GetNames());
+        Assert.Equal("N:25", wb.GetValue("A1").ToCanonicalString());
+    }
+
+    [Fact]
+    public void Load_NonCanonicalNames_SavedCanonicalAndSorted()
+    {
+        var wb = GridlineFile.Load("{\"format\":\"gridline\",\"version\":1,\"names\":{\"total\":\"$a$10:$a$1\",\"Gone\":\"#REF!\",\"rate\":\"$b$1\"},\"cells\":[]}"u8);
+        Assert.Equal(
+            "{\n  \"format\": \"gridline\",\n  \"version\": 1,\n  \"names\": {\n    \"Gone\": \"#REF!\",\n    \"rate\": \"$B$1\",\n    \"total\": \"$A$1:$A$10\"\n  },\n  \"cells\": []\n}\n",
+            GridlineFile.Serialize(wb));
+    }
+
+    [Theory]
+    [InlineData("{\"Rate\":\"B1\"}")]
+    [InlineData("{\"Rate\":\"$B$1:B2\"}")]
+    [InlineData("{\"A1\":\"$B$1\"}")]
+    [InlineData("{\"TRUE\":\"$B$1\"}")]
+    [InlineData("{\"1x\":\"$B$1\"}")]
+    [InlineData("{\"\":\"$B$1\"}")]
+    [InlineData("{\"Rate\":\"$B$1\",\"RATE\":\"$C$1\"}")]
+    [InlineData("{\"Rate\":\"$B$1\",\"Rate\":\"$C$1\"}")]
+    [InlineData("{\"Rate\":\"#NAME?\"}")]
+    [InlineData("{\"Rate\":1}")]
+    public void Load_InvalidOrDuplicateNames_Throws(string names) =>
+        Assert.Throws<GridlineFormatException>(() => GridlineFile.Load(Encoding.UTF8.GetBytes("{\"format\":\"gridline\",\"version\":1,\"names\":" + names + ",\"cells\":[[\"A1\",\"1\"]]}")));
+
     [Fact]
     public void Load_RecalcsValues()
     {
@@ -93,7 +153,6 @@ public class GridlineFileTests
     [InlineData("{\"format\":\"gridline\",\"version\":1,\"cells\":[[\"A0\",\"5\"]]}")]
     [InlineData("{\"format\":\"gridline\",\"version\":1,\"cells\":[[\"A1\",\"5\"],[\"a1\",\"6\"]]}")]
     [InlineData("{\"format\":\"gridline\",\"version\":1,\"names\":[],\"cells\":[]}")]
-    [InlineData("{\"format\":\"gridline\",\"version\":1,\"names\":{\"Rate\":\"$B$1\"},\"cells\":[]}")]
     public void Load_Invalid_Throws(string json) => Assert.Throws<GridlineFormatException>(() => GridlineFile.Load(Encoding.UTF8.GetBytes(json)));
 
     [Fact]

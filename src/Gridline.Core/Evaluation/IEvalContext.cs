@@ -14,6 +14,12 @@ internal interface IEvalContext
     /// </summary>
     bool TryResolveName(string name, out RangeAddress target, out bool isRange);
 
+    /// <summary>
+    /// The value of a name that <see cref="TryResolveName"/> did not resolve: <c>#NAME?</c> when it is undefined,
+    /// <c>#REF!</c> when it is defined with <c>refersTo</c> = <c>#REF!</c> (§9.6).
+    /// </summary>
+    CellValue UnresolvedNameValue(string name) => CellValue.FromError(ErrorCodes.Name);
+
     /// <summary>Non-blank cells of <paramref name="range"/> in row-major order, in O(non-blank in range + log n).</summary>
     IEnumerable<(int Row, int Col, CellValue Value)> EnumerateNonBlank(RangeAddress range);
 

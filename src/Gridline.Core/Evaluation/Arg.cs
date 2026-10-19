@@ -14,7 +14,7 @@ internal sealed class Arg
     private readonly IEvalContext _ctx;
     private CellValue _value;
     private bool _evaluated;
-    private readonly bool _isName;
+    private readonly string? _name; // non-null when the argument is a (possibly parenthesized) name
 
     internal Arg(Node? node, Evaluator evaluator, IEvalContext ctx)
     {
@@ -41,7 +41,7 @@ internal sealed class Arg
                 break;
             case NameNode nn:
                 // An undefined name is not a reference: it has no cells, and its value is #NAME?.
-                _isName = true;
+                _name = nn.Name;
                 if (ctx.TryResolveName(nn.Name, out var target, out bool isRange))
                 {
                     IsReference = true;
@@ -72,14 +72,14 @@ internal sealed class Arg
 
     /// <summary>
     /// The scalar value. A range gives <c>#VALUE!</c>; a reference to a blank cell gives Blank (not 0);
-    /// an undefined name gives <c>#NAME?</c>; an omitted argument gives Blank.
+    /// an unresolved name gives <c>#NAME?</c> (or <c>#REF!</c>, §9.6); an omitted argument gives Blank.
     /// </summary>
     public CellValue Evaluate()
     {
         if (!_evaluated)
         {
             _value = _node is null ? CellValue.Blank
-                : _isName ? EvaluateName() // reuse the ctor's resolution so shape and value agree
+                : _name is not null ? EvaluateName() // reuse the ctor's resolution so shape and value agree
                 : _evaluator.EvalScalar(_node, _ctx);
             _evaluated = true;
         }
@@ -87,7 +87,7 @@ internal sealed class Arg
     }
 
     private CellValue EvaluateName() =>
-        Range is null ? CellValue.FromError(ErrorCodes.Name)
+        Range is null ? _ctx.UnresolvedNameValue(_name!)
         : IsRange ? CellValue.FromError(ErrorCodes.Value)
         : Range.Get(0, 0);
 }

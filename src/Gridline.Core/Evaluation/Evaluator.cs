@@ -60,7 +60,7 @@ internal sealed class Evaluator(IReadOnlyDictionary<string, IFunction> functions
             case RefNode r: return ctx.GetCellValue(r.Row, r.Col);
             case RangeNode: return CellValue.FromError(ErrorCodes.Value);
             case NameNode nn:
-                if (!ctx.TryResolveName(nn.Name, out var target, out bool isRange)) return CellValue.FromError(ErrorCodes.Name);
+                if (!ctx.TryResolveName(nn.Name, out var target, out bool isRange)) return ctx.UnresolvedNameValue(nn.Name);
                 return isRange ? CellValue.FromError(ErrorCodes.Value) : ctx.GetCellValue(target.TopLeft.Row, target.TopLeft.Col);
             case UnaryNode u:
             {
