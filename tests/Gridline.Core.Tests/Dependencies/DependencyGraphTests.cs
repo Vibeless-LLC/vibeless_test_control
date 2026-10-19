@@ -88,13 +88,10 @@ public class DependencyGraphTests
         Assert.Empty(p.CycleMembers);
     }
 
-    [Fact, Trait("Category", "Perf")]
-    public void Recalc_RangeChain_NoStackOverflow() => AssertRangeChain(10_000, TimeSpan.FromSeconds(5));
-
     [Fact]
     public void Recalc_RangeChain_Correct() => AssertRangeChain(2_000, null);
 
-    private static void AssertRangeChain(int last, TimeSpan? budget)
+    internal static void AssertRangeChain(int last, TimeSpan? budget)
     {
         var g = new DependencyGraph();
         for (int n = 2; n <= last; n++)
@@ -258,7 +255,7 @@ public class DependencyGraphTests
         Assert.Equal(n, p.Order.Count);
     }
 
-    private static DependencyGraph SharedFullColumnGraph()
+    internal static DependencyGraph SharedFullColumnGraph()
     {
         var g = new DependencyGraph();
         for (int r = 1; r <= 1000; r++)
@@ -266,7 +263,7 @@ public class DependencyGraphTests
         return g;
     }
 
-    private static int[] ColumnAKeys() => Enumerable.Range(1, 100_000).Select(r => new CellAddress(r, 1).Key).ToArray();
+    internal static int[] ColumnAKeys() => Enumerable.Range(1, 100_000).Select(r => new CellAddress(r, 1).Key).ToArray();
 
     [Fact]
     public void BulkChange_SharedRanges_EachDependentOnce()
@@ -281,20 +278,6 @@ public class DependencyGraphTests
         Assert.Equal(1000, p.Order.Count);
         Assert.Equal(1000, p.Order.Distinct().Count());
         Assert.Empty(p.CycleMembers);
-    }
-
-    [Fact, Trait("Category", "Perf")]
-    public void BulkChange_SharedRanges_Fast()
-    {
-        var g = SharedFullColumnGraph();
-        var keys = ColumnAKeys();
-        var planner = new RecalcPlanner(g);
-        planner.Plan(keys, [], _ => false); // warm-up
-        var sw = Stopwatch.StartNew();
-        var p = planner.Plan(keys, [], _ => false);
-        sw.Stop();
-        Assert.Equal(1000, p.Order.Count);
-        Assert.True(sw.Elapsed < TimeSpan.FromSeconds(2), $"took {sw.Elapsed}");
     }
 
     [Fact]
@@ -328,5 +311,28 @@ public class DependencyGraphTests
         var p = Plan(g, ["Q7"]);
         Assert.Empty(p.Order);
         Assert.Empty(p.CycleMembers);
+    }
+}
+
+/// <summary>Timed dependency-graph tests: in the serial Perf collection so they never overlap other perf runs.</summary>
+[Collection(Gridline.Tests.Shared.PerfCollection.Name)]
+[Trait("Category", "Perf")]
+public class DependencyGraphPerfTests
+{
+    [Fact]
+    public void Recalc_RangeChain_NoStackOverflow() => DependencyGraphTests.AssertRangeChain(10_000, TimeSpan.FromSeconds(5));
+
+    [Fact]
+    public void BulkChange_SharedRanges_Fast()
+    {
+        var g = DependencyGraphTests.SharedFullColumnGraph();
+        var keys = DependencyGraphTests.ColumnAKeys();
+        var planner = new RecalcPlanner(g);
+        planner.Plan(keys, [], _ => false); // warm-up
+        var sw = Stopwatch.StartNew();
+        var p = planner.Plan(keys, [], _ => false);
+        sw.Stop();
+        Assert.Equal(1000, p.Order.Count);
+        Assert.True(sw.Elapsed < TimeSpan.FromSeconds(2), $"took {sw.Elapsed}");
     }
 }

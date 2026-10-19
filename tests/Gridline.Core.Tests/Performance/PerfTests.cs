@@ -5,7 +5,7 @@ using Xunit.Abstractions;
 
 namespace Gridline.Core.Tests.Performance;
 
-/// <summary>§12 performance budgets P-2, P-3, P-4, P-7 (P-1 and P-5 live in Gridline.IO.Tests). Release build.</summary>
+/// <summary>§12 performance budgets P-2, P-3, P-4 (P-1, P-5 and P-7 load or save files, so they live in Gridline.IO.Tests). Release build.</summary>
 [Collection(PerfCollection.Name)]
 [Trait("Category", "Perf")]
 public class PerfTests(ITestOutputHelper output)
@@ -65,26 +65,5 @@ public class PerfTests(ITestOutputHelper output)
         Assert.Equal(1, wb.LastRecalc.EvaluatedFormulaCount);
         Assert.Equal("N:" + S(5_000_050_000 - 500 + 7), wb.GetValue("B1").ToCanonicalString());
         Assert.True(t <= TimeSpan.FromMilliseconds(50), $"P-4 median {PerfHarness.Ms(t)} > 50 ms");
-    }
-
-    [Fact]
-    public void P7_ManySums()
-    {
-        List<KeyValuePair<string, string>>? cells = new(101_000);
-        for (int i = 1; i <= 100_000; i++) cells.Add(new("A" + S(i), S(i)));
-        for (int i = 1; i <= 1000; i++) cells.Add(new("B" + S(i), "=SUM($A$1:$A$100000)"));
-
-        Workbook? wb = null;
-        var t = PerfHarness.Median(() => wb = null, () => wb = Snapshot(cells!));
-        cells = null;
-        PerfHarness.FullGc();
-        long privateBytes = Process.GetCurrentProcess().PrivateMemorySize64;
-        output.WriteLine($"P-7 load median {PerfHarness.Ms(t)}, private memory {privateBytes / (1024 * 1024)} MB");
-
-        Assert.NotNull(wb);
-        Assert.Equal(1000, wb.LastRecalc.EvaluatedFormulaCount);
-        Assert.Equal("N:5000050000", wb.GetValue("B1000").ToCanonicalString());
-        Assert.True(t <= TimeSpan.FromSeconds(5), $"P-7 load median {PerfHarness.Ms(t)} > 5 s");
-        Assert.True(privateBytes <= 600L * 1024 * 1024, $"P-7 private memory {privateBytes / (1024 * 1024)} MB > 600 MB");
     }
 }
