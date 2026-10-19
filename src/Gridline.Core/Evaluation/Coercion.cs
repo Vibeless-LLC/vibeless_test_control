@@ -38,4 +38,18 @@ internal static class Coercion
         ValueKind.Text => CellValue.FromError(ErrorCodes.Value),
         _ => v,
     };
+
+    /// <summary>
+    /// Integer parameter (§6.9): coerce to number, truncate toward zero. Values outside the int range saturate.
+    /// On failure <paramref name="error"/> is the coercion error.
+    /// </summary>
+    public static bool TryToInt(CellValue v, out int value, out CellValue error)
+    {
+        var n = ToNumber(v);
+        if (n.Kind == ValueKind.Error) { value = 0; error = n; return false; }
+        double t = Math.Truncate(n.Number);
+        value = t >= int.MaxValue ? int.MaxValue : t <= int.MinValue ? int.MinValue : (int)t;
+        error = default;
+        return true;
+    }
 }

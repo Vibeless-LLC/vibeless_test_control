@@ -39,3 +39,15 @@ Non-trivial implementation choices, with spec section references.
 - **Arg shape (§7.0).** `IsReference` is true for a cell ref, range ref or defined name. An undefined name is classified as a direct argument (`IsReference` false, `Range` null), so `IsReference` ⇔ `Range != null` always holds and aggregation code can rely on it; `SUM(Nope)` propagates `#NAME?`. `Range` is a 1×1 `RangeRef` for a single-cell reference or a name bound to a cell, the normalized range for a range ref or range name, and null otherwise. A name's `Evaluate()` reuses the constructor's resolution, so shape and value cannot disagree. `Evaluate()` of an undefined name is `#NAME?`; of an omitted arg is Blank. Functions decide omitted-arg defaults themselves via `IsOmitted`.
 - **Unknown function is decided by the Evaluator's dictionary (§5.4).** The name is upper-cased (invariant) and looked up; if absent the result is `#NAME?` and no argument is evaluated.
 - **`Comparison.Compare` throws `ArgumentException` on an Error operand**; callers propagate errors first. `RangeRef.Get` throws `ArgumentOutOfRangeException` outside the range.
+
+## Task 6: Function registry and Math functions
+
+- **COUNTBLANK needs a reference argument (§7.1).** A direct argument (`COUNTBLANK(1)`) gives `#VALUE!`.
+- **ROUNDUP when every digit lies below the rounding position (§7.1).** The brief's rule returns 0 when the cut is below 0; that is right for ROUND and ROUNDDOWN but wrong for ROUNDUP ("away from zero"). ROUNDUP of a non-zero `n` with such a cut returns `±10^(-digits)`, e.g. `ROUNDUP(0.001,-2)` = `100`, matching Excel.
+- **Integer parameters saturate (§6.9).** `Coercion.TryToInt` truncates toward zero; values beyond the `int` range clamp to `int.MinValue`/`int.MaxValue`, so `ROUND(x,1E300)` returns `x` and `ROUND(x,-1E300)` returns 0.
+- **Omitted/blank direct arguments (§7.0).** In agg functions an omitted argument counts as `0` (`SUM(,1)` = 1). COUNT ignores it; COUNTA does not count it.
+- **COUNT on a direct text argument** counts it only if it parses as a number under `NumberGrammar` (after trimming spaces), per the §7.1 "numeric text" rule.
+- **SUMPRODUCT is sparse.** Each argument is mapped by position over its non-blank numeric cells; only positions present in every argument contribute, so cost is O(non-blank cells), not O(range area). Dimension mismatch beats an error value in a cell; otherwise the first error (argument order, then row-major) propagates. A scalar argument is a 1×1 array; booleans and text count as 0.
+- **POWER reuses the `^` operator's logic** via `Evaluator.Power` (made internal), so `POWER(0,0)` is `#NUM!` and `POWER(0,-1)` is `#DIV/0!` as in §6.3.
+- **Arity registry keys are upper-case**; `Register` upper-cases the name and throws on duplicates.
+- **CoreTestHost (test side).** A mini interpreter of cell inputs stands in for the Workbook until Task 10 (blank, `'text`, TRUE/FALSE, number via NumberGrammar, `=formula` evaluated in listed order, else text).

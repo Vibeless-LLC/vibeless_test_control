@@ -150,7 +150,7 @@ internal sealed class Evaluator(IReadOnlyDictionary<string, IFunction> functions
         }
     }
 
-    private static CellValue Power(double x, double y)
+    internal static CellValue Power(double x, double y)
     {
         if (x == 0 && y == 0) return CellValue.FromError(ErrorCodes.Num);
         if (x == 0 && y < 0) return CellValue.FromError(ErrorCodes.Div0);
