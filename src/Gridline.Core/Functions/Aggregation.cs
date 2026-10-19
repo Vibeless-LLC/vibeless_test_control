@@ -14,7 +14,7 @@ internal static class Aggregation
     /// <summary>
     /// Feeds the numbers of <paramref name="args"/> to <paramref name="acc"/> in order and returns how many there were.
     /// Reference args contribute numbers only (text, booleans and blanks are ignored); direct args are coerced
-    /// (omitted counts as 0). <paramref name="error"/> is the first error encountered, or Blank (<c>default</c>).
+    /// (an omitted argument is absent and skipped, §5.3). <paramref name="error"/> is the first error encountered, or Blank (<c>default</c>).
     /// Streaming instead of collecting into a list keeps a 100k-cell SUM allocation-free (§12 P-7).
     /// </summary>
     public static int Collect<T>(IReadOnlyList<Arg> args, ref T acc, out CellValue error) where T : struct, IAccumulator

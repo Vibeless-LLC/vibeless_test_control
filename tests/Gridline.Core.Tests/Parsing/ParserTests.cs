@@ -53,4 +53,19 @@ public class ParserTests
     [Fact] public void PercentAfterUnary() { var p = (PercentNode)P("-2%").Root!; Assert.IsType<UnaryNode>(p.Operand); }
     [Fact] public void ArgCountMax255() { Assert.False(P("SUM(" + string.Join(",", Enumerable.Repeat("1", 255)) + ")").IsParseError); Assert.True(P("SUM(" + string.Join(",", Enumerable.Repeat("1", 256)) + ")").IsParseError); }
     [Fact] public void ArityCaseInsensitive() => Assert.True(P("pi(1)").IsParseError);
+
+    /// <summary>§5.4: deep nesting must not crash the process; it parses or is a parse error.</summary>
+    [Fact]
+    public void DeepNesting20000_NoCrash()
+    {
+        string body = new string('(', 20_000) + "1" + new string(')', 20_000);
+        var r = P(body); // must return, not overflow the stack
+        Assert.True(r.IsParseError || r.Root is not null);
+
+        // End to end through the Workbook (parse, dependency extraction, evaluation), as deep as the 32,767 input limit allows.
+        string deepest = "=" + new string('(', 16_382) + "1" + new string(')', 16_382);
+        Assert.Equal(Workbook.MaxInputLength - 1, deepest.Length);
+        var v = CoreTestHost.Eval(deepest);
+        Assert.True(v is "E:#PARSE!" or "N:1" or "E:#VALUE!", v);
+    }
 }

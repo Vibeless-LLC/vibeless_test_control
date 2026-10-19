@@ -15,5 +15,8 @@ public class CellValueTests
     [Fact] public void Default_IsBlank() { var d = default(CellValue); Assert.Equal(ValueKind.Blank, d.Kind); Assert.Equal("", d.Text); Assert.Equal("", d.Error); Assert.Equal(CellValue.Blank, d); Assert.Equal("BLANK", d.ToString()); }
     [Fact] public void ErrorCodes_IsValid() { Assert.True(ErrorCodes.IsValid("#CIRC!")); Assert.False(ErrorCodes.IsValid("#div/0!")); Assert.False(ErrorCodes.IsValid("")); }
     [Fact] public void Equality_DifferentKinds() { Assert.NotEqual(CellValue.FromText(""), CellValue.Blank); Assert.Equal(CellValue.FromNumber(0).GetHashCode(), CellValue.FromNumber(-0.0).GetHashCode()); }
+    [Fact] public void FromText_Null_ThrowsArgumentNull() => Assert.Throws<ArgumentNullException>(() => CellValue.FromText(null!));
+    [Fact] public void FromError_Null_ThrowsArgumentException() => Assert.ThrowsAny<ArgumentException>(() => CellValue.FromError(null!));
+    [Fact] public void FromBoolean_False_Canonical() { var v = CellValue.FromBoolean(false); Assert.Equal(ValueKind.Boolean, v.Kind); Assert.False(v.Boolean); Assert.Equal("B:FALSE", v.ToCanonicalString()); }
     [Fact] public void EventArgs_CarriesAddresses() => Assert.Equal(new[] { "A1" }, new CellsChangedEventArgs(new[] { "A1" }).Addresses);
 }
