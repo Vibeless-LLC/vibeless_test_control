@@ -58,8 +58,16 @@ public static class GridlineFile
     {
         try
         {
+            // Lenient reading: skip a leading UTF-8 BOM (never written).
+            if (utf8Json.Length >= 3 && utf8Json[0] == 0xEF && utf8Json[1] == 0xBB && utf8Json[2] == 0xBF)
+                utf8Json = utf8Json[3..];
             using var doc = JsonDocument.Parse(utf8Json.ToArray());
             return Build(doc.RootElement);
+        }
+        catch (InvalidOperationException ex)
+        {
+            // System.Text.Json cannot decode this string (e.g. invalid UTF-8 inside a value).
+            throw new GridlineFormatException("undecodable string: " + ex.Message, ex);
         }
         catch (JsonException ex)
         {
@@ -104,8 +112,23 @@ public static class GridlineFile
     {
         try { return e.GetString()!; }
         catch (InvalidOperationException) { }
+        return Unescape(e.GetRawText());
+    }
 
-        var raw = e.GetRawText();
+    /// <summary>A property name, tolerating lone-surrogate escapes (parsed from the raw property text).</summary>
+    private static string PropName(JsonProperty p)
+    {
+        try { return p.Name; }
+        catch (InvalidOperationException) { }
+        var raw = p.ToString();
+        int end = 1;
+        while (raw[end] != '"') end += raw[end] == '\\' ? 2 : 1;
+        return Unescape(raw[..(end + 1)]);
+    }
+
+    /// <summary>Unescapes a raw quoted JSON string token (already validated by the parser).</summary>
+    private static string Unescape(string raw)
+    {
         var sb = new StringBuilder(raw.Length);
         for (int i = 1; i < raw.Length - 1; i++)
         {
@@ -133,7 +156,7 @@ public static class GridlineFile
     {
         if (root.ValueKind != JsonValueKind.Object) throw new GridlineFormatException("root must be an object");
 
-        if (!root.TryGetProperty("format", out var format) || format.ValueKind != JsonValueKind.String || format.GetString() != "gridline")
+        if (!root.TryGetProperty("format", out var format) || format.ValueKind != JsonValueKind.String || Str(format) != "gridline")
             throw new GridlineFormatException("format must be \"gridline\"");
 
         if (!root.TryGetProperty("version", out var ver) || ver.ValueKind != JsonValueKind.Number || !ver.TryGetInt64(out long version))
@@ -148,7 +171,7 @@ public static class GridlineFile
             foreach (var p in namesEl.EnumerateObject())
             {
                 if (p.Value.ValueKind != JsonValueKind.String) throw new GridlineFormatException("name target must be a string");
-                names.Add(new(p.Name, Str(p.Value)));
+                names.Add(new(PropName(p), Str(p.Value)));
             }
         }
 

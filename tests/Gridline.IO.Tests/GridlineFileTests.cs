@@ -126,6 +126,44 @@ public class GridlineFileTests
     }
 
     [Fact]
+    public void Load_InvalidUtf8InString_Throws()
+    {
+        var head = Encoding.UTF8.GetBytes("{\"format\":\"gridline\",\"version\":1,\"cells\":[[\"A1\",\"");
+        var tail = Encoding.UTF8.GetBytes("\"]]}");
+        var bytes = head.Concat(new byte[] { 0xFF }).Concat(tail).ToArray();
+        Assert.Throws<GridlineFormatException>(() => GridlineFile.Load(bytes));
+    }
+
+    [Fact]
+    public void Load_LoneSurrogateInNamesKey_Throws() =>
+        Assert.Throws<GridlineFormatException>(() => GridlineFile.Load("{\"format\":\"gridline\",\"version\":1,\"names\":{\"\\ud83d\":\"$B$1\"},\"cells\":[]}"u8));
+
+    [Fact]
+    public void Load_LoneSurrogateInFormat_Throws() =>
+        Assert.Throws<GridlineFormatException>(() => GridlineFile.Load("{\"format\":\"\\ud83d\",\"version\":1,\"cells\":[]}"u8));
+
+    [Theory]
+    [InlineData("1.0")]
+    [InlineData("1e0")]
+    public void Load_NonIntegerSpelledVersion_Throws(string v) =>
+        Assert.Throws<GridlineFormatException>(() => GridlineFile.Load(Encoding.UTF8.GetBytes("{\"format\":\"gridline\",\"version\":" + v + ",\"cells\":[]}")));
+
+    [Fact]
+    public void Load_LeadingBom_Accepted()
+    {
+        var json = Encoding.UTF8.GetBytes("{\"format\":\"gridline\",\"version\":1,\"cells\":[[\"A1\",\"x\"]]}");
+        var bytes = new byte[] { 0xEF, 0xBB, 0xBF }.Concat(json).ToArray();
+        Assert.Equal("x", GridlineFile.Load(bytes).GetInput("A1"));
+    }
+
+    [Fact]
+    public void Load_PairAdjacentToLoneSurrogate_DecodesExactly()
+    {
+        var wb = GridlineFile.Load("{\"format\":\"gridline\",\"version\":1,\"cells\":[[\"A1\",\"😀\\ud83d\"]]}"u8);
+        Assert.Equal("\uD83D\uDE00\uD83D", wb.GetInput("A1"));
+    }
+
+    [Fact]
     public void LoadFromPath_Missing_Propagates() =>
         Assert.ThrowsAny<IOException>(() => GridlineFile.LoadFromPath(Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))));
 }
