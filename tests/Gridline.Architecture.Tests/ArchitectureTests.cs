@@ -1,4 +1,5 @@
 using System.Reflection;
+using Gridline.App;
 using Gridline.Cli;
 using Gridline.Core;
 using Gridline.IO;
@@ -12,13 +13,17 @@ public class ArchitectureTests
     private static readonly Assembly Core = typeof(Workbook).Assembly;
     private static readonly Assembly IO = typeof(GridlineFile).Assembly;
     private static readonly Assembly Cli = typeof(CliApp).Assembly;
+    private static readonly Assembly App = typeof(DocumentSession).Assembly;
 
     private const string CoreNs = "Gridline.Core";
 
     private static void AssertNoDependency(Assembly asm, string ns, params string[] forbidden)
     {
-        var result = Types.InAssembly(asm)
-            .That().ResideInNamespace(ns)
+        var selected = Types.InAssembly(asm).That().ResideInNamespace(ns);
+        // Guard: a rule over an empty selection passes vacuously. Commands is the only namespace allowed to be empty.
+        if (ns != "Gridline.Core.Commands")
+            Assert.NotEmpty(selected.GetTypes());
+        var result = selected
             .ShouldNot().HaveDependencyOnAny(forbidden)
             .GetResult();
         Assert.True(result.IsSuccessful,
@@ -41,7 +46,9 @@ public class ArchitectureTests
     public void Cli_does_not_depend_on_App_or_Windows() =>
         AssertNoDependency(Cli, "Gridline.Cli", "Gridline.App", "System.Windows");
 
-    // App_does_not_depend_on_Cli: added in Phase 2 with the App project.
+    [Fact]
+    public void App_does_not_depend_on_Cli() =>
+        AssertNoDependency(App, "Gridline.App", "Gridline.Cli");
 
     [Fact]
     public void Addressing_does_not_depend_on_other_Core_namespaces() =>
@@ -75,7 +82,7 @@ public class ArchitectureTests
     {
         const BindingFlags flags = BindingFlags.Public | BindingFlags.Static | BindingFlags.DeclaredOnly;
         var offenders = new List<string>();
-        foreach (var asm in new[] { Core, IO, Cli })
+        foreach (var asm in new[] { Core, IO, Cli, App })
         {
             foreach (var type in asm.GetTypes())
             {

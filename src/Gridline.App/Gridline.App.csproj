@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>Gridline.App</RootNamespace>
+    <AssemblyName>Gridline.App</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Gridline.Core\Gridline.Core.csproj" />
+    <ProjectReference Include="..\Gridline.IO\Gridline.IO.csproj" />
+  </ItemGroup>
+
+</Project>
