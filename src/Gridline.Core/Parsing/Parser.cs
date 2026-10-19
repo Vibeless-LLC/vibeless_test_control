@@ -9,6 +9,9 @@ internal static class Parser
 {
     private sealed class SyntaxError : Exception { }
 
+    /// <summary>Maximum recursive (non-left-spine) nesting of any AST the parser returns (§5.4); deeper is #PARSE!.</summary>
+    internal const int MaxDepth = 1024;
+
     /// <summary>Parses a formula body (no leading '='). Never throws.</summary>
     public static ParsedFormula Parse(string formulaBody, IFunctionArity arity)
     {
@@ -31,6 +34,14 @@ internal static class Parser
         private readonly List<Token> _t;
         private readonly IFunctionArity _arity;
         private int _i;
+        // Recursive depth (walker recursion, left spines excluded) of the node most recently returned by a Parse* method.
+        private int _h;
+
+        private void Raise(int h)
+        {
+            if (h > MaxDepth) throw new SyntaxError();
+            _h = h;
+        }
 
         public State(List<Token> tokens, IFunctionArity arity) { _t = tokens; _arity = arity; }
 
@@ -39,50 +50,42 @@ internal static class Parser
         private bool IsOp(params string[] ops) =>
             Cur.Kind == TokenKind.Op && Array.IndexOf(ops, Cur.Text) >= 0;
 
-        public Node Compare()
+        public Node Compare() => Expr(1);
+
+        private static int Prec(string op) => op switch
+        {
+            "=" or "<>" or "<" or ">" or "<=" or ">=" => 1,
+            "&" => 2,
+            "+" or "-" => 3,
+            "*" or "/" => 4,
+            "^" => 5,
+            _ => 0,
+        };
+
+        // Precedence climbing (all binary operators are left-associative). One method instead of one per level keeps
+        // the stack cost of a nesting level small, so MaxDepth levels fit comfortably in a 1 MB thread.
+        private Node Expr(int minPrec)
         {
             RuntimeHelpers.EnsureSufficientExecutionStack();
-            Node left = Concat();
-            while (IsOp("=", "<>", "<", ">", "<=", ">="))
-            {
-                string op = Cur.Text; _i++;
-                left = new BinaryNode(op, left, Concat());
-            }
-            return left;
-        }
-
-        private Node Concat()
-        {
-            Node left = Additive();
-            while (IsOp("&")) { _i++; left = new BinaryNode("&", left, Additive()); }
-            return left;
-        }
-
-        private Node Additive()
-        {
-            Node left = Multiplic();
-            while (IsOp("+", "-")) { string op = Cur.Text; _i++; left = new BinaryNode(op, left, Multiplic()); }
-            return left;
-        }
-
-        private Node Multiplic()
-        {
-            Node left = Power();
-            while (IsOp("*", "/")) { string op = Cur.Text; _i++; left = new BinaryNode(op, left, Power()); }
-            return left;
-        }
-
-        private Node Power()
-        {
             Node left = Postfix();
-            while (IsOp("^")) { _i++; left = new BinaryNode("^", left, Postfix()); }
+            int h = _h;
+            while (Cur.Kind == TokenKind.Op)
+            {
+                string op = Cur.Text;
+                int prec = Prec(op);
+                if (prec < minPrec || prec == 0) break;
+                _i++;
+                Node right = prec == 5 ? Postfix() : Expr(prec + 1);
+                left = new BinaryNode(op, left, right);
+                h = Math.Max(h, _h + 1); Raise(h);
+            }
             return left;
         }
 
         private Node Postfix()
         {
             Node n = Unary();
-            while (IsOp("%")) { _i++; n = new PercentNode(n); }
+            while (IsOp("%")) { _i++; n = new PercentNode(n); Raise(_h + 1); }
             return n;
         }
 
@@ -92,7 +95,9 @@ internal static class Parser
             {
                 char op = Cur.Text[0]; _i++;
                 RuntimeHelpers.EnsureSufficientExecutionStack();
-                return new UnaryNode(op, Unary());
+                var operand = Unary();
+                Raise(_h + 1);
+                return new UnaryNode(op, operand);
             }
             return Primary();
         }
@@ -111,6 +116,7 @@ internal static class Parser
         private Node Primary()
         {
             Token t = Cur;
+            _h = 0;
             switch (t.Kind)
             {
                 case TokenKind.Number:
@@ -143,6 +149,7 @@ internal static class Parser
                     Node inner = Compare();
                     if (Cur.Kind != TokenKind.RParen) throw new SyntaxError();
                     _i++;
+                    Raise(_h + 1);
                     return new ParenNode(inner);
                 }
                 case TokenKind.Function:
@@ -158,6 +165,7 @@ internal static class Parser
             if (Cur.Kind != TokenKind.LParen) throw new SyntaxError();
             _i++;
             var args = new List<Node?>();
+            int h = 0;
             if (Cur.Kind == TokenKind.RParen)
             {
                 _i++; // empty list: zero args
@@ -167,7 +175,7 @@ internal static class Parser
                 while (true)
                 {
                     if (Cur.Kind == TokenKind.Comma || Cur.Kind == TokenKind.RParen) args.Add(null);
-                    else args.Add(Compare());
+                    else { args.Add(Compare()); h = Math.Max(h, _h); }
                     if (Cur.Kind == TokenKind.Comma) { _i++; continue; }
                     if (Cur.Kind == TokenKind.RParen) { _i++; break; }
                     throw new SyntaxError();
@@ -176,6 +184,7 @@ internal static class Parser
             if (_arity.TryGetArity(fn.Text.ToUpperInvariant(), out int min, out int max)
                 && (args.Count < min || args.Count > max))
                 throw new SyntaxError();
+            Raise(h + 1);
             return new CallNode(fn.Text, args);
         }
     }

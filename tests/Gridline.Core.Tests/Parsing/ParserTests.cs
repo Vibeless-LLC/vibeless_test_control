@@ -54,18 +54,79 @@ public class ParserTests
     [Fact] public void ArgCountMax255() { Assert.False(P("SUM(" + string.Join(",", Enumerable.Repeat("1", 255)) + ")").IsParseError); Assert.True(P("SUM(" + string.Join(",", Enumerable.Repeat("1", 256)) + ")").IsParseError); }
     [Fact] public void ArityCaseInsensitive() => Assert.True(P("pi(1)").IsParseError);
 
-    /// <summary>§5.4: deep nesting must not crash the process; it parses or is a parse error.</summary>
+    /// <summary>§5.4: deep nesting must not crash the process; beyond Parser.MaxDepth it is a parse error.</summary>
     [Fact]
     public void DeepNesting20000_NoCrash()
     {
         string body = new string('(', 20_000) + "1" + new string(')', 20_000);
-        var r = P(body); // must return, not overflow the stack
-        Assert.True(r.IsParseError || r.Root is not null);
+        Assert.True(P(body).IsParseError);
 
         // End to end through the Workbook (parse, dependency extraction, evaluation), as deep as the 32,767 input limit allows.
         string deepest = "=" + new string('(', 16_382) + "1" + new string(')', 16_382);
         Assert.Equal(Workbook.MaxInputLength - 1, deepest.Length);
-        var v = CoreTestHost.Eval(deepest);
-        Assert.True(v is "E:#PARSE!" or "N:1" or "E:#VALUE!", v);
+        Assert.Equal("E:#PARSE!", CoreTestHost.Eval(deepest));
+    }
+
+    private static string Parens(int n) => new string('(', n) + "1" + new string(')', n);
+
+    [Fact]
+    public void Depth1024Parens_Parses()
+    {
+        Assert.Equal(1024, Parser.MaxDepth);
+        Assert.False(P(Parens(Parser.MaxDepth)).IsParseError);
+        Assert.True(P(Parens(Parser.MaxDepth + 1)).IsParseError);
+        Assert.Equal("N:1", CoreTestHost.Eval("=" + Parens(Parser.MaxDepth)));
+    }
+
+    [Fact] public void DeepUnaryChain_ParseErrorBeyondMax() => Assert.True(P(new string('-', 5000) + "1").IsParseError);
+    [Fact] public void UnaryChain_AtMax_Parses()
+    {
+        Assert.False(P(new string('-', Parser.MaxDepth) + "1").IsParseError);
+        Assert.True(P(new string('-', Parser.MaxDepth + 1) + "1").IsParseError);
+    }
+    [Fact] public void DeepPercentChain_ParseErrorBeyondMax() => Assert.True(P("1" + new string('%', 5000)).IsParseError);
+    [Fact] public void PercentChain_AtMax_Parses()
+    {
+        Assert.False(P("1" + new string('%', Parser.MaxDepth)).IsParseError);
+        Assert.True(P("1" + new string('%', Parser.MaxDepth + 1)).IsParseError);
+    }
+    [Fact] public void PercentOverDeepParens_CountsBoth() =>
+        Assert.True(P(Parens(Parser.MaxDepth - 1) + "%%").IsParseError);
+    [Fact] public void DeepNestedCalls_ParseErrorBeyondMax() =>
+        Assert.True(P(string.Concat(Enumerable.Repeat("SUM(", 2000)) + "1" + new string(')', 2000)).IsParseError);
+
+    [Fact]
+    public void LeftDeepChain_StillParses()
+    {
+        string f = "1" + string.Concat(Enumerable.Repeat("+1", 15999));
+        Assert.False(P(f).IsParseError);
+        Assert.Equal("N:16000", CoreTestHost.Eval("=" + f));
+    }
+
+    [Fact] public void WorkbookDeepUnary_IsParseError() => Assert.Equal("E:#PARSE!", CoreTestHost.Eval("=" + new string('-', 5000) + "1"));
+
+    [Fact]
+    public void PrintAndShift_AtMaxDepth_SmallStack()
+    {
+        Exception? failure = null;
+        string? printed = null;
+        var roots = new[] { Parens(Parser.MaxDepth), new string('-', Parser.MaxDepth) + "A1", "A1" + new string('%', Parser.MaxDepth) }
+            .Select(b => P(b).Root!).ToArray();
+        var t = new Thread(() =>
+        {
+            try
+            {
+                foreach (var root in roots)
+                {
+                    var shifted = ReferenceRewriter.Shift(root, 1, 1, out _);
+                    printed = FormulaPrinter.Print(shifted, _ => null);
+                }
+            }
+            catch (Exception e) { failure = e; }
+        }, 256 * 1024);
+        t.Start();
+        t.Join();
+        Assert.Null(failure);
+        Assert.EndsWith("B2" + new string('%', Parser.MaxDepth), printed);
     }
 }

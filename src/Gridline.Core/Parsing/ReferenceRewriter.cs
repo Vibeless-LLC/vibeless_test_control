@@ -37,19 +37,8 @@ internal static class ReferenceRewriter
     {
         switch (node)
         {
-            case RefNode r:
-                if (!TryShift(r, dRow, dCol, out var s)) { changed = true; return new ErrorNode(RefError); }
-                if (!ReferenceEquals(s, r)) changed = true;
-                return s;
-            case RangeNode rg:
-                if (!TryShift(rg.First, dRow, dCol, out var f) || !TryShift(rg.Second, dRow, dCol, out var g))
-                {
-                    changed = true;
-                    return new ErrorNode(RefError);
-                }
-                if (ReferenceEquals(f, rg.First) && ReferenceEquals(g, rg.Second)) return rg;
-                changed = true;
-                return new RangeNode(f, g);
+            case RefNode r: return ShiftRef(r, dRow, dCol, ref changed);
+            case RangeNode rg: return ShiftRange(rg, dRow, dCol, ref changed);
             case UnaryNode u:
                 return u with { Operand = Walk(u.Operand, dRow, dCol, ref changed) };
             case PercentNode p:
@@ -57,20 +46,52 @@ internal static class ReferenceRewriter
             case ParenNode pn:
                 return pn with { Inner = Walk(pn.Inner, dRow, dCol, ref changed) };
             case CallNode c:
-                var args = new Node?[c.Args.Count];
-                for (int i = 0; i < args.Length; i++)
-                    args[i] = c.Args[i] is { } a ? Walk(a, dRow, dCol, ref changed) : null;
-                return new CallNode(c.Name, args);
+                return WalkCall(c, dRow, dCol, ref changed);
             case BinaryNode bn:
-                var spine = new List<BinaryNode>();
-                Node cur = bn;
-                while (cur is BinaryNode b2) { spine.Add(b2); cur = b2.Left; }
-                Node acc = Walk(cur, dRow, dCol, ref changed);
-                for (int i = spine.Count - 1; i >= 0; i--)
-                    acc = new BinaryNode(spine[i].Op, acc, Walk(spine[i].Right, dRow, dCol, ref changed));
-                return acc;
+                return WalkBinary(bn, dRow, dCol, ref changed);
             default:
                 return node; // literals and names carry no references
         }
+    }
+
+    // Kept out of Walk so its frame stays small: Walk recurses once per nesting level (bounded by Parser.MaxDepth).
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+    private static Node ShiftRef(RefNode r, int dRow, int dCol, ref bool changed)
+    {
+        if (!TryShift(r, dRow, dCol, out var s)) { changed = true; return new ErrorNode(RefError); }
+        if (!ReferenceEquals(s, r)) changed = true;
+        return s;
+    }
+
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+    private static Node ShiftRange(RangeNode rg, int dRow, int dCol, ref bool changed)
+    {
+        if (!TryShift(rg.First, dRow, dCol, out var f) || !TryShift(rg.Second, dRow, dCol, out var g))
+        {
+            changed = true;
+            return new ErrorNode(RefError);
+        }
+        if (ReferenceEquals(f, rg.First) && ReferenceEquals(g, rg.Second)) return rg;
+        changed = true;
+        return new RangeNode(f, g);
+    }
+
+    private static Node WalkCall(CallNode c, int dRow, int dCol, ref bool changed)
+    {
+        var args = new Node?[c.Args.Count];
+        for (int i = 0; i < args.Length; i++)
+            args[i] = c.Args[i] is { } a ? Walk(a, dRow, dCol, ref changed) : null;
+        return new CallNode(c.Name, args);
+    }
+
+    private static Node WalkBinary(BinaryNode bn, int dRow, int dCol, ref bool changed)
+    {
+        var spine = new List<BinaryNode>();
+        Node cur = bn;
+        while (cur is BinaryNode b2) { spine.Add(b2); cur = b2.Left; }
+        Node acc = Walk(cur, dRow, dCol, ref changed);
+        for (int i = spine.Count - 1; i >= 0; i--)
+            acc = new BinaryNode(spine[i].Op, acc, Walk(spine[i].Right, dRow, dCol, ref changed));
+        return acc;
     }
 }
