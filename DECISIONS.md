@@ -102,3 +102,9 @@ Non-trivial implementation choices, with spec section references.
 - **Script input (§10.3).** stdin is read whole and split on `\n` only (a trailing `\r` is stripped per line), so a lone CR inside an input is preserved. Errors in SAVE/LOAD print an ERR line and the script continues; a failing LOAD keeps the current workbook.
 - **ERR text (§10.3).** Messages are free-form, with tab/CR/LF replaced by spaces so each ERR is one line with exactly one tab.
 - **Script command word and address** are case-insensitive; addresses are echoed in canonical form.
+
+## Task 13: Architecture tests
+
+- **Prefix matching (§3.2).** NetArchTest `HaveDependencyOn("System.IO.File")` is a prefix match, so it would also flag `System.IO.FileInfo`/`FileSystemInfo`/`FileAccess`. Core uses none of those, so the strict prefix is accepted.
+- **Namespace filters (§3.3).** Per-namespace rules use the exact sub-namespace (`Gridline.Core.Parsing`, ...); `Gridline.Core.Addressing` forbids each sibling sub-namespace explicitly. Dependencies on root `Gridline.Core` types are not forbidden by §3.3 and are not checked. The Commands rules pass vacuously until Phase 2; the App rule is added in Phase 2.
+- **Mutable static check (§3.2).** Reflects over Core, IO and Cli publicly visible types; flags public static fields that are neither const nor readonly and public static properties with a public setter, ignoring compiler-generated names containing `<`.
