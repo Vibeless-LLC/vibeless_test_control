@@ -11,6 +11,24 @@ public class CopyPasteTests
     [Fact] public void Paste_RangeCornerOffGrid_WholeRef() { var wb = new Workbook(); wb.SetCell("B1","=SUM(A1:A2)"); wb.CopyPaste("B1","A1"); Assert.Equal("=SUM(#REF!)", wb.GetInput("A1")); }
     [Fact] public void Paste_ParseErrorVerbatim() { var wb = new Workbook(); wb.SetCell("A1","=1+"); wb.CopyPaste("A1","B1"); Assert.Equal("=1+", wb.GetInput("B1")); }
     [Fact] public void Paste_OneUndoStep() { var wb = new Workbook(); wb.SetCell("A1","1"); wb.SetCell("A2","2"); wb.CopyPaste("A1:A2","B1"); wb.Undo(); Assert.Equal("", wb.GetInput("B1")); Assert.Equal("", wb.GetInput("B2")); }
+    [Fact]
+    public void Paste_ReemittedFormulaTooLong_ThrowsAndChangesNothing()
+    {
+        var wb = new Workbook();
+        wb.SetCell("B1", "=" + string.Join("+", Enumerable.Repeat("A1", 10_900))); // ~32.7k chars; each A1 grows to ZZ1 when pasted
+        Assert.True(wb.GetInput("B1").Length <= Workbook.MaxInputLength);
+        wb.SetCell("ZZ2", "keep");
+        bool undoBefore = wb.CanUndo;
+        int fired = 0;
+        wb.CellsChanged += (_, _) => fired++;
+        Assert.Throws<ArgumentException>(() => wb.CopyPaste("B1", "ZY1"));
+        Assert.Equal("", wb.GetInput("ZY1"));
+        Assert.Equal(0, fired);
+        Assert.Equal(undoBefore, wb.CanUndo);
+        wb.Undo();
+        Assert.Equal("", wb.GetInput("ZZ2"));
+        Assert.Equal(1, wb.GetUsedAddresses().Count);
+    }
     [Fact] public void Paste_InvalidAddresses_Throw()
     {
         var wb = new Workbook();

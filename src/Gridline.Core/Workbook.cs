@@ -176,6 +176,9 @@ public sealed class Workbook
                 if (cell.Kind == CellKind.Formula && cell.Formula is { IsParseError: false, Root: { } root })
                     text = FormulaPrinter.Print(ReferenceRewriter.Shift(root, dRow, dCol, out _), NameCasing);
             }
+            // Re-emitted formulas can grow (shifted refs get longer, #REF!); keep the input-length invariant.
+            if (text.Length > MaxInputLength)
+                throw new ArgumentException($"Pasted input exceeds {MaxInputLength} characters.", nameof(destinationTopLeft));
             pasted[r * cols + c] = text;
         }
 
