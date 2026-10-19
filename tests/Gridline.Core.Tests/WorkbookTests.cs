@@ -155,4 +155,23 @@ public class WorkbookTests
         Assert.Equal("A1,A3,C3", Keys("A1:C3"));
         Assert.False(store.TryGet(CellAddress.Parse("B2").Key, out _));
     }
+
+    [Fact]
+    public void SingleColumnRange_TracksOutOfOrderInsertOverwriteAndRemove()
+    {
+        var wb = new Workbook();
+        wb.SetCell("B1", "=SUM(A1:A200)");
+        wb.SetCell("A150", "5"); wb.SetCell("A3", "2"); wb.SetCell("A100", "7"); wb.SetCell("A201", "1000");
+        Assert.Equal("N:14", wb.GetValue("B1").ToCanonicalString());
+        wb.SetCell("A3", "10");
+        Assert.Equal("N:22", wb.GetValue("B1").ToCanonicalString());
+        wb.SetCell("A100", "");
+        Assert.Equal("N:15", wb.GetValue("B1").ToCanonicalString());
+        wb.SetCell("A150", "=A3*2");
+        Assert.Equal("N:30", wb.GetValue("B1").ToCanonicalString());
+        Assert.Equal("N:-3", Eval("=MIN(A1:A5)", ("A1", "-1"), ("A2", "-3"), ("A4", "2")));
+        Assert.Equal("N:2", Eval("=MAX(A1:A5)", ("A1", "-1"), ("A2", "-3"), ("A4", "2")));
+    }
+
+    private static string Eval(string f, params (string, string)[] inputs) => CoreTestHost.Eval(f, inputs);
 }

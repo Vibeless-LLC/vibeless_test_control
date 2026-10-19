@@ -20,6 +20,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Compile Include="../Shared/PerfHarness.cs" Link="Shared/PerfHarness.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\..\src\Gridline.Core\Gridline.Core.csproj" />
   </ItemGroup>
 

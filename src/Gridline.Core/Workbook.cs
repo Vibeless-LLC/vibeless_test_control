@@ -223,6 +223,25 @@ public sealed class Workbook
             var r = new RangeAddress(
                 new CellAddress(Math.Min(range.TopLeft.Row, range.BottomRight.Row), Math.Min(range.TopLeft.Col, range.BottomRight.Col)),
                 new CellAddress(Math.Max(range.TopLeft.Row, range.BottomRight.Row), Math.Max(range.TopLeft.Col, range.BottomRight.Col)));
+            return r.Cols == 1 ? SingleColumn(r) : ByKey(r);
+        }
+
+        /// <summary>Reads the column's row/cell lists directly: no dictionary lookup per cell (§12 P-4, P-7).</summary>
+        private IEnumerable<(int Row, int Col, CellValue Value)> SingleColumn(RangeAddress r)
+        {
+            int c = r.TopLeft.Col, bottom = r.BottomRight.Row;
+            if (store.GetColumn(c) is not { } col) yield break;
+            var rows = col.Rows;
+            var cells = col.Cells;
+            for (int i = col.LowerBound(r.TopLeft.Row); i < rows.Count && rows[i] <= bottom; i++)
+            {
+                var v = cells[i].Value;
+                if (v.Kind != ValueKind.Blank) yield return (rows[i], c, v);
+            }
+        }
+
+        private IEnumerable<(int Row, int Col, CellValue Value)> ByKey(RangeAddress r)
+        {
             foreach (int key in store.KeysInRange(r))
             {
                 store.TryGet(key, out var c);

@@ -7,12 +7,12 @@ internal static class MathFunctions
 {
     public static void Register(FunctionRegistry r)
     {
-        Add(r, "SUM", 1, 255, a => Aggregate(a, x => x.Sum()));
-        Add(r, "AVERAGE", 1, 255, a => Aggregate(a, x => x.Sum() / x.Count, ErrorCodes.Div0));
-        Add(r, "MIN", 1, 255, a => Aggregate(a, x => x.Min()));
-        Add(r, "MAX", 1, 255, a => Aggregate(a, x => x.Max()));
-        Add(r, "PRODUCT", 1, 255, a => Aggregate(a, Product));
-        Add(r, "SUMSQ", 1, 255, a => Aggregate(a, x => x.Sum(v => v * v)));
+        Add(r, "SUM", 1, 255, a => Aggregate(a, new SumAcc(), static (x, _) => x.Sum));
+        Add(r, "AVERAGE", 1, 255, a => Aggregate(a, new SumAcc(), static (x, n) => x.Sum / n, ErrorCodes.Div0));
+        Add(r, "MIN", 1, 255, a => Aggregate(a, new MinMaxAcc(max: false), static (x, _) => x.Value));
+        Add(r, "MAX", 1, 255, a => Aggregate(a, new MinMaxAcc(max: true), static (x, _) => x.Value));
+        Add(r, "PRODUCT", 1, 255, a => Aggregate(a, new ProductAcc(), static (x, _) => x.Product));
+        Add(r, "SUMSQ", 1, 255, a => Aggregate(a, new SumSqAcc(), static (x, _) => x.Sum));
         Add(r, "COUNT", 1, 255, Count);
         Add(r, "COUNTA", 1, 255, CountA);
         Add(r, "COUNTBLANK", 1, 1, a => CountBlank(a[0]));
@@ -55,21 +55,47 @@ internal static class MathFunctions
         return n.Kind == ValueKind.Error ? n : f(n.Number);
     }
 
-    private static double Product(List<double> x)
+    // Folds run left to right in argument then row-major order, exactly like summing a collected list (§7.1).
+    private struct SumAcc : IAccumulator
     {
-        double p = 1;
-        foreach (var v in x) p *= v;
-        return p;
+        public double Sum;
+        public void Add(double v) => Sum += v;
     }
 
-    private static CellValue Aggregate(IReadOnlyList<Arg> args, Func<List<double>, double> f, string? emptyError = null)
+    private struct SumSqAcc : IAccumulator
     {
-        var nums = new List<double>();
-        var err = Aggregation.Collect(args, nums);
+        public double Sum;
+        public void Add(double v) => Sum += v * v;
+    }
+
+    private struct ProductAcc() : IAccumulator
+    {
+        public double Product = 1;
+        public void Add(double v) => Product *= v;
+    }
+
+    /// <summary>Keeps the first minimum (or maximum) seen.</summary>
+    private struct MinMaxAcc(bool max) : IAccumulator
+    {
+        private readonly bool _max = max;
+        private bool _any;
+        public double Value;
+
+        public void Add(double v)
+        {
+            if (!_any || (_max ? v > Value : v < Value)) Value = v;
+            _any = true;
+        }
+    }
+
+    private static CellValue Aggregate<T>(IReadOnlyList<Arg> args, T acc, Func<T, int, double> result, string? emptyError = null)
+        where T : struct, IAccumulator
+    {
+        int count = Aggregation.Collect(args, ref acc, out var err);
         if (err.Kind == ValueKind.Error) return err;
-        if (nums.Count == 0)
+        if (count == 0)
             return emptyError is not null ? CellValue.FromError(emptyError) : CellValue.FromNumber(0);
-        return CellValue.FromNumber(f(nums));
+        return CellValue.FromNumber(result(acc, count));
     }
 
     private static CellValue Count(IReadOnlyList<Arg> args)

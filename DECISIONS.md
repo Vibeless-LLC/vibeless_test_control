@@ -108,3 +108,18 @@ Non-trivial implementation choices, with spec section references.
 - **Prefix matching (§3.2).** NetArchTest `HaveDependencyOn("System.IO.File")` is a prefix match, so it would also flag `System.IO.FileInfo`/`FileSystemInfo`/`FileAccess`. Core uses none of those, so the strict prefix is accepted.
 - **Namespace filters (§3.3).** Per-namespace rules use the exact sub-namespace (`Gridline.Core.Parsing`, ...); `Gridline.Core.Addressing` forbids each sibling sub-namespace explicitly. Dependencies on root `Gridline.Core` types are not forbidden by §3.3 and are not checked. The Commands rules pass vacuously until Phase 2; the App rule is added in Phase 2.
 - **Mutable static check (§3.2).** Reflects over Core, IO and Cli publicly visible types; flags public static fields that are neither const nor readonly and public static properties with a public setter, ignoring compiler-generated names containing `<`.
+
+## Task 14: Performance budgets (§12 P-1–P-5, P-7)
+
+- **Harness (§12).** `tests/Shared/PerfHarness.cs` is linked (`<Compile Include … Link>`) into Gridline.Core.Tests and Gridline.IO.Tests rather than duplicated. `Median(setup, measured, runs = 5)` does one warm-up, then 5 timed runs; `setup` and a full GC run before each run, outside the timing. P-3 times each of its 1,000 `SetCell` calls separately and takes the median. P-7 memory is `PrivateMemorySize64` after `GC.Collect(); GC.WaitForPendingFinalizers(); GC.Collect()`, with the last loaded workbook still alive; the test host is included.
+- **Serial perf runs.** Perf tests are in the `Perf` collection (`DisableParallelization = true`, so it runs alone after the parallel collections). Its collection fixture `PerfLock` holds an exclusive lock file in the temp directory, because `dotnet test Gridline.sln` runs the two test assemblies in parallel processes; the lock keeps Core and IO perf tests from overlapping. The two older `Category=Perf` tests in `DependencyGraphTests` keep their own class and are not in the collection.
+- **Workloads.** P-1/P-3/P-5 use the brief's workbook: A1:A50000 = 1..50000, B{i} = `=A{i}+A{i+1}*2`, B50000 wraps to A1. P-1's JSON is built by hand in the test (not by the writer under test). P-2 and P-4 reuse one workbook: `setup` restores the original input (outside the timing), then the timed edit is applied. P-7 "load" is `Workbook.FromSnapshot` (the in-process API), median of 5 loads.
+- **Measured, then optimized only P-7 (Release, dev machine).** Before → after:
+  P-1 load 162–245 ms → ~230 ms (budget 1.5 s; unchanged code path, run-to-run noise);
+  P-2 chain edit 26 ms → 27–33 ms (250 ms);
+  P-3 no-dependents edit median < 0.1 ms → 0.001 ms (1 ms);
+  P-4 SUM edit 7.3 ms → 2.6 ms (50 ms);
+  P-5 save 22.6 ms → 22.5 ms (1 s);
+  P-7 load 2,423 ms → ~1,590 ms, private memory 46–60 MB (5 s, 600 MB).
+  Only P-7 was within ~2x of its budget, so only it was optimized; every budget now has at least 3x headroom.
+- **P-7 fixes.** (1) Aggregates (SUM, AVERAGE, MIN, MAX, PRODUCT, SUMSQ) fold numbers as they are enumerated through a struct `IAccumulator` instead of collecting them into a `List<double>` and calling LINQ. A 100k-cell SUM used to grow a list to 1 MB on the large object heap, and 1,000 of them allocated about 1 GB. The fold order (argument, then row-major) is the same as before; `Enumerable.Sum` over doubles is a sequential loop, so results are bit-identical. MIN/MAX keep the first extreme, like LINQ. (2) `CellStore` keeps each column's cells in a list parallel to its sorted row list, and `EvalContext.EnumerateNonBlank` reads a single-column range straight from those lists, with no dictionary lookup per cell. Multi-column ranges still use the key merge.

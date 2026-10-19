@@ -4,16 +4,31 @@ namespace Gridline.Core;
 
 /// <summary>
 /// Sparse store of non-blank cells keyed by <see cref="CellAddress.Key"/>. A dictionary gives O(1) lookup; each
-/// column also keeps a sorted list of its occupied rows (binary-search insert), so a range is enumerated
-/// row-major by merging the column lists, touching only occupied cells.
+/// column also keeps its occupied rows in a sorted list (binary-search insert) with the cells in a parallel list,
+/// so a range is enumerated row-major by merging the column lists, touching only occupied cells, and a
+/// single-column range is read straight from the column's lists without dictionary lookups (§12 P-4, P-7).
 /// </summary>
 internal sealed class CellStore
 {
     /// <summary>Ranges with at most this many cells are enumerated by probing the dictionary directly.</summary>
     private const int ProbeArea = 64;
 
+    /// <summary>Occupied rows of one column, ascending, and their cells at the same indices.</summary>
+    internal sealed class Column
+    {
+        public readonly List<int> Rows = [];
+        public readonly List<Cell> Cells = [];
+
+        /// <summary>Index of the first row ≥ <paramref name="row"/>.</summary>
+        public int LowerBound(int row)
+        {
+            int i = Rows.BinarySearch(row);
+            return i >= 0 ? i : ~i;
+        }
+    }
+
     private readonly Dictionary<int, Cell> _cells = [];
-    private readonly List<int>?[] _rowsByCol = new List<int>?[CellAddress.MaxColumns + 1];
+    private readonly Column?[] _columns = new Column?[CellAddress.MaxColumns + 1];
 
     public int Count => _cells.Count;
 
@@ -22,24 +37,42 @@ internal sealed class CellStore
     public void Set(int key, Cell c)
     {
         ArgumentNullException.ThrowIfNull(c);
+        var a = CellAddress.FromKey(key);
+        var col = _columns[a.Col] ??= new Column();
         if (_cells.TryAdd(key, c))
         {
-            var a = CellAddress.FromKey(key);
-            var rows = _rowsByCol[a.Col] ??= [];
             // Appending in row order (the common load case) is O(1).
-            if (rows.Count == 0 || rows[^1] < a.Row) rows.Add(a.Row);
-            else rows.Insert(~rows.BinarySearch(a.Row), a.Row);
+            if (col.Rows.Count == 0 || col.Rows[^1] < a.Row)
+            {
+                col.Rows.Add(a.Row);
+                col.Cells.Add(c);
+            }
+            else
+            {
+                int i = ~col.Rows.BinarySearch(a.Row);
+                col.Rows.Insert(i, a.Row);
+                col.Cells.Insert(i, c);
+            }
         }
-        else _cells[key] = c;
+        else
+        {
+            _cells[key] = c;
+            col.Cells[col.Rows.BinarySearch(a.Row)] = c;
+        }
     }
 
     public void Remove(int key)
     {
         if (!_cells.Remove(key)) return;
         var a = CellAddress.FromKey(key);
-        var rows = _rowsByCol[a.Col]!;
-        rows.RemoveAt(rows.BinarySearch(a.Row));
+        var col = _columns[a.Col]!;
+        int i = col.Rows.BinarySearch(a.Row);
+        col.Rows.RemoveAt(i);
+        col.Cells.RemoveAt(i);
     }
+
+    /// <summary>The occupied rows and cells of column <paramref name="col"/>, or null if it has none.</summary>
+    public Column? GetColumn(int col) => (uint)col < (uint)_columns.Length ? _columns[col] : null;
 
     /// <summary>All occupied keys in row-major order (sorts on demand).</summary>
     public IEnumerable<int> KeysRowMajor()
@@ -71,10 +104,11 @@ internal sealed class CellStore
 
     private IEnumerable<int> SingleColumn(RangeAddress r)
     {
-        int col = r.TopLeft.Col;
-        if (_rowsByCol[col] is not { } rows) yield break;
-        for (int i = LowerBound(rows, r.TopLeft.Row); i < rows.Count && rows[i] <= r.BottomRight.Row; i++)
-            yield return rows[i] * 1024 + col;
+        int c = r.TopLeft.Col;
+        if (_columns[c] is not { } col) yield break;
+        var rows = col.Rows;
+        for (int i = col.LowerBound(r.TopLeft.Row); i < rows.Count && rows[i] <= r.BottomRight.Row; i++)
+            yield return rows[i] * 1024 + c;
     }
 
     private IEnumerable<int> Merge(RangeAddress r)
@@ -82,24 +116,18 @@ internal sealed class CellStore
         int top = r.TopLeft.Row, bottom = r.BottomRight.Row;
         // Min-heap of (column → cursor) ordered by the cursor's cell key, which is row-major.
         var heap = new PriorityQueue<(int Col, int Index), int>();
-        for (int col = r.TopLeft.Col; col <= r.BottomRight.Col; col++)
+        for (int c = r.TopLeft.Col; c <= r.BottomRight.Col; c++)
         {
-            if (_rowsByCol[col] is not { Count: > 0 } rows) continue;
-            int i = LowerBound(rows, top);
-            if (i < rows.Count && rows[i] <= bottom) heap.Enqueue((col, i), rows[i] * 1024 + col);
+            if (_columns[c] is not { Rows.Count: > 0 } col) continue;
+            int i = col.LowerBound(top);
+            if (i < col.Rows.Count && col.Rows[i] <= bottom) heap.Enqueue((c, i), col.Rows[i] * 1024 + c);
         }
         while (heap.TryDequeue(out var cur, out int key))
         {
             yield return key;
-            var rows = _rowsByCol[cur.Col]!;
+            var rows = _columns[cur.Col]!.Rows;
             int next = cur.Index + 1;
             if (next < rows.Count && rows[next] <= bottom) heap.Enqueue((cur.Col, next), rows[next] * 1024 + cur.Col);
         }
-    }
-
-    private static int LowerBound(List<int> rows, int row)
-    {
-        int i = rows.BinarySearch(row);
-        return i >= 0 ? i : ~i;
     }
 }
