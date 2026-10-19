@@ -27,7 +27,7 @@ public class CopyPasteTests
         Assert.Equal(undoBefore, wb.CanUndo);
         wb.Undo();
         Assert.Equal("", wb.GetInput("ZZ2"));
-        Assert.Equal(1, wb.GetUsedAddresses().Count);
+        Assert.Single(wb.GetUsedAddresses());
     }
     [Fact] public void Paste_InvalidAddresses_Throw()
     {
