@@ -27,3 +27,15 @@ Non-trivial implementation choices, with spec section references.
 - **Arity counts omitted args (§5.3, §5.4).** `PI()` has 0 args, `F(,)` has 2 omitted args. The arity lookup uses the upper-cased function name; unknown functions skip the check.
 - **Deep nesting is a parse error, not a crash (§5.4).** The parser calls `EnsureSufficientExecutionStack` at expression and unary recursion and maps the resulting exception to `#PARSE!`.
 - **Unary applies below `%` (§5.3).** `-2%` parses as `Percent(Unary(-,2))`, following the EBNF (`postfix = unary {"%"}`).
+
+## Task 5: Coercion, comparison, evaluator
+
+- **Blank flows internally; only the final result maps Blank→0 (§6.3, §6.6).** A reference to a blank cell (or a name bound to one, or a function returning Blank) yields `Blank`, so comparison's "blank adapts" rule sees it: `=A1=""` with A1 blank is TRUE. Arithmetic coerces Blank→0, `&` coerces Blank→"". `Evaluator.Evaluate` maps a top-level Blank to Number 0.
+- **NumberGrammar uses ASCII digits only (§4.3 rule 5).** The regex `\d` is read as `[0-9]` (invariant culture); a hand scanner validates the shape, then `double.Parse` invariant parses the part before `%`. Non-finite results (`1e999`) are rejected; underflow (`1e-999`) is accepted as 0.
+- **Left operand's coercion error beats the right operand's error (§6.4).** `"x"+#N/A` → `#VALUE!`: the left is evaluated and coerced before the right is evaluated. If the left is an error, the right is not evaluated (no observable difference; functions are deterministic).
+- **`&` checks the 32,767 limit on every concatenation (§4.4)**, not only at the end, so a chain cannot build huge intermediates. The final result is also checked, covering text returned by functions.
+- **Stack safety (§6.7 "recursion within a formula is acceptable").** Binary operators walk the left spine iteratively, so a left-deep chain such as 16,000 `+1` terms evaluates normally. Other recursion calls `RuntimeHelpers.EnsureSufficientExecutionStack()`; `InsufficientExecutionStackException` becomes `#VALUE!` for that formula.
+- **Parenthesized references stay references (§7.0).** `Arg` unwraps `ParenNode`s before classifying, so `SUM((A1:B2))` gets a range argument (as Excel does). `(A1:B2)` in scalar position is still `#VALUE!`.
+- **Arg shape (§7.0).** `IsReference` is true for a cell ref, range ref or name, including an undefined name. `Range` is a 1×1 `RangeRef` for a single-cell reference or a name bound to a cell, the normalized range for a range ref or range name, and null for direct args, omitted args and undefined names. `Evaluate()` of an undefined name is `#NAME?`; of an omitted arg is Blank. Functions decide omitted-arg defaults themselves via `IsOmitted`.
+- **Unknown function is decided by the Evaluator's dictionary (§5.4).** The name is upper-cased (invariant) and looked up; if absent the result is `#NAME?` and no argument is evaluated.
+- **`Comparison.Compare` throws `ArgumentException` on an Error operand**; callers propagate errors first. `RangeRef.Get` throws `ArgumentOutOfRangeException` outside the range.
