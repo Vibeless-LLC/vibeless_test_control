@@ -27,15 +27,15 @@ public static class CliApp
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return Fail(stderr, IoError, ex.Message); }
     }
 
-    /// <summary>An unusable path (empty, embedded NUL, unsupported form): reported as an I/O error, exit 2 (§10.1).</summary>
-    private sealed class InvalidPathException(string path, Exception inner)
-        : IOException($"invalid path '{path}': {inner.Message}", inner);
+    /// <summary>An unusable path (empty, embedded NUL, unsupported form): reported as an I/O error, exit 2 (§10.1).
+    /// The path itself is not echoed: it may hold control characters such as NUL.</summary>
+    private sealed class InvalidPathException(Exception inner) : IOException("invalid path: " + inner.Message, inner);
 
     private static Workbook LoadFile(string path)
     {
         byte[] bytes;
         try { bytes = File.ReadAllBytes(path); }
-        catch (Exception ex) when (ex is ArgumentException or NotSupportedException) { throw new InvalidPathException(path, ex); }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException) { throw new InvalidPathException(ex); }
         return GridlineFile.Load(bytes);
     }
 
@@ -43,7 +43,7 @@ public static class CliApp
     {
         string full;
         try { full = Path.GetFullPath(path); }
-        catch (Exception ex) when (ex is ArgumentException or NotSupportedException) { throw new InvalidPathException(path, ex); }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException) { throw new InvalidPathException(ex); }
         GridlineFile.SaveToPath(wb, full);
     }
 
