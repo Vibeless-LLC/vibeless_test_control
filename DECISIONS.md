@@ -51,3 +51,9 @@ Non-trivial implementation choices, with spec section references.
 - **POWER reuses the `^` operator's logic** via `Evaluator.Power` (made internal), so `POWER(0,0)` is `#NUM!` and `POWER(0,-1)` is `#DIV/0!` as in §6.3.
 - **Arity registry keys are upper-case**; `Register` upper-cases the name and throws on duplicates.
 - **CoreTestHost (test side).** A mini interpreter of cell inputs stands in for the Workbook until Task 10 (blank, `'text`, TRUE/FALSE, number via NumberGrammar, `=formula` evaluated in listed order, else text).
+
+## Task 7: Logic and information functions
+
+- **IF omitted branches (§7.2).** An omitted `t` (`IF(TRUE,,1)`) yields `0`; an omitted or absent `f` yields `FALSE`. Only the chosen branch is evaluated (`Arg` is lazy). The condition is coerced per §6.2, so `"x"` is `#VALUE!` and `"true"` is TRUE.
+- **AND/OR/XOR scan (§7.2).** Reference args contribute booleans and numbers only (text and blanks are ignored; the first error propagates); direct args use §6.2 coercion, so an omitted direct arg counts as FALSE. No logical value found gives `#VALUE!`. XOR is TRUE for an odd count of TRUE values.
+- **ISBLANK (§7.2)** is TRUE only for a single-cell reference (or a name bound to one) whose cell is blank; a range argument is FALSE.

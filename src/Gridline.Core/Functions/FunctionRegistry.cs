@@ -21,6 +21,7 @@ internal sealed class FunctionRegistry
     {
         var r = new FunctionRegistry();
         MathFunctions.Register(r);
+        LogicFunctions.Register(r);
         return r;
     }
 
