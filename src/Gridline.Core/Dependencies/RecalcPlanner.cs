@@ -16,13 +16,21 @@ internal sealed class RecalcPlanner(DependencyGraph g)
 {
     public RecalcPlan Plan(IEnumerable<int> changedKeys, IEnumerable<string> changedNames, Func<int, bool> isFormula)
     {
+        // Roots are deduplicated; non-formula changes are expanded in bulk so each shared range entry
+        // or name node is visited once however many changed cells it covers.
+        var rootSet = new HashSet<int>();
         var roots = new List<int>();
+        var nonFormula = new List<int>();
         foreach (int k in changedKeys)
         {
-            if (isFormula(k)) roots.Add(k);
-            else roots.AddRange(g.DirectDependents(k));
+            if (!isFormula(k)) nonFormula.Add(k);
+            else if (rootSet.Add(k)) roots.Add(k);
         }
-        foreach (string n in changedNames) roots.AddRange(g.NameDependents(n));
+        foreach (int d in g.DistinctDirectDependentsOfMany(nonFormula))
+            if (rootSet.Add(d)) roots.Add(d);
+        foreach (string n in changedNames)
+            foreach (int d in g.NameDependents(n))
+                if (rootSet.Add(d)) roots.Add(d);
         return Run(roots, restrictTo: null);
     }
 

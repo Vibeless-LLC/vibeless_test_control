@@ -86,24 +86,54 @@ internal sealed class DependencyGraph
         if (_cellDependents.TryGetValue(key, out var direct))
             foreach (int d in direct) yield return d;
 
+        foreach (var e in EntriesContaining(key))
+            foreach (int d in e.Dependents)
+                if (d >= 0) yield return d;
+                else foreach (int x in _nameNodes[-d - 1].Dependents) yield return x;
+    }
+
+    /// <summary>
+    /// Distinct formula cells that depend directly on any of <paramref name="keys"/>. Each distinct range entry
+    /// and name node is expanded at most once, so a bulk change of many cells under shared ranges costs
+    /// O(keys scanned + entries hit + distinct dependents), not O(keys × fan-in).
+    /// </summary>
+    public IEnumerable<int> DistinctDirectDependentsOfMany(IEnumerable<int> keys)
+    {
+        var seen = new HashSet<int>();
+        var entries = new HashSet<RangeEntry>(ReferenceEqualityComparer.Instance);
+        var names = new HashSet<int>();
+        foreach (int key in keys)
+        {
+            if (_cellDependents.TryGetValue(key, out var direct))
+                foreach (int d in direct)
+                    if (seen.Add(d)) yield return d;
+            foreach (var e in EntriesContaining(key))
+            {
+                if (!entries.Add(e)) continue;
+                foreach (int d in e.Dependents)
+                {
+                    if (d >= 0) { if (seen.Add(d)) yield return d; }
+                    else if (names.Add(d))
+                        foreach (int x in _nameNodes[-d - 1].Dependents)
+                            if (seen.Add(x)) yield return x;
+                }
+            }
+        }
+    }
+
+    private IEnumerable<RangeEntry> EntriesContaining(int key)
+    {
         var addr = CellAddress.FromKey(key);
         if ((uint)addr.Col > MaxCol || _columns[addr.Col] is not { } col) yield break;
-
         if (col.Blocks is { } blocks)
         {
             int b = (addr.Row - 1) / BlockRows;
             if ((uint)b < (uint)blocks.Length && blocks[b] is { } list)
                 foreach (var e in list)
-                    if (e.Range.Contains(addr))
-                        foreach (int d in e.Dependents)
-                            if (d >= 0) yield return d;
-                            else foreach (int x in _nameNodes[-d - 1].Dependents) yield return x;
+                    if (e.Range.Contains(addr)) yield return e;
         }
         foreach (var e in col.Tall)
-            if (e.Range.Contains(addr))
-                foreach (int d in e.Dependents)
-                    if (d >= 0) yield return d;
-                    else foreach (int x in _nameNodes[-d - 1].Dependents) yield return x;
+            if (e.Range.Contains(addr)) yield return e;
     }
 
     /// <summary>Formula cells that reference the name (whether or not it is defined).</summary>

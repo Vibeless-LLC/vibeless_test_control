@@ -88,21 +88,26 @@ public class DependencyGraphTests
         Assert.Empty(p.CycleMembers);
     }
 
+    [Fact, Trait("Category", "Perf")]
+    public void Recalc_RangeChain_NoStackOverflow() => AssertRangeChain(10_000, TimeSpan.FromSeconds(5));
+
     [Fact]
-    public void Recalc_RangeChain_NoStackOverflow()
+    public void Recalc_RangeChain_Correct() => AssertRangeChain(2_000, null);
+
+    private static void AssertRangeChain(int last, TimeSpan? budget)
     {
         var g = new DependencyGraph();
-        for (int n = 2; n <= 10_000; n++)
+        for (int n = 2; n <= last; n++)
             g.SetDependencies(new CellAddress(n, 1).Key,
                 new FormulaDeps([], [new RangeAddress(new CellAddress(1, 1), new CellAddress(n - 1, 1))], []));
         var sw = Stopwatch.StartNew();
         var p = Plan(g, ["A1"]);
         sw.Stop();
-        Assert.Equal(9_999, p.Order.Count);
-        Assert.True(sw.Elapsed < TimeSpan.FromSeconds(5), $"took {sw.Elapsed}");
+        Assert.Equal(last - 1, p.Order.Count);
+        if (budget is { } b) Assert.True(sw.Elapsed < b, $"took {sw.Elapsed}");
         var pos = new Dictionary<int, int>();
         for (int i = 0; i < p.Order.Count; i++) pos[p.Order[i]] = i;
-        for (int n = 3; n <= 10_000; n++)
+        for (int n = 3; n <= last; n++)
             Assert.True(pos[new CellAddress(n - 1, 1).Key] < pos[new CellAddress(n, 1).Key]);
     }
 
@@ -251,6 +256,68 @@ public class DependencyGraphTests
         var p = Plan(g, ["A1"], isFormula: _ => true);
         Assert.Equal(n, p.CycleMembers.Count);
         Assert.Equal(n, p.Order.Count);
+    }
+
+    private static DependencyGraph SharedFullColumnGraph()
+    {
+        var g = new DependencyGraph();
+        for (int r = 1; r <= 1000; r++)
+            g.SetDependencies(new CellAddress(r, 2).Key, Ranges("$A$1:$A$100000"));
+        return g;
+    }
+
+    private static int[] ColumnAKeys() => Enumerable.Range(1, 100_000).Select(r => new CellAddress(r, 1).Key).ToArray();
+
+    [Fact]
+    public void BulkChange_SharedRanges_EachDependentOnce()
+    {
+        var g = SharedFullColumnGraph();
+        var keys = ColumnAKeys();
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        var p = new RecalcPlanner(g).Plan(keys, [], _ => false);
+        long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        // O(changed + affected), not O(changed x fan-in) (~10^8 roots, ~400 MB+).
+        Assert.True(allocated < 32L * 1024 * 1024, $"allocated {allocated:N0} bytes");
+        Assert.Equal(1000, p.Order.Count);
+        Assert.Equal(1000, p.Order.Distinct().Count());
+        Assert.Empty(p.CycleMembers);
+    }
+
+    [Fact, Trait("Category", "Perf")]
+    public void BulkChange_SharedRanges_Fast()
+    {
+        var g = SharedFullColumnGraph();
+        var keys = ColumnAKeys();
+        var planner = new RecalcPlanner(g);
+        planner.Plan(keys, [], _ => false); // warm-up
+        var sw = Stopwatch.StartNew();
+        var p = planner.Plan(keys, [], _ => false);
+        sw.Stop();
+        Assert.Equal(1000, p.Order.Count);
+        Assert.True(sw.Elapsed < TimeSpan.FromSeconds(2), $"took {sw.Elapsed}");
+    }
+
+    [Fact]
+    public void DistinctDirectDependentsOfMany_DedupesAcrossCellsRangesAndNames()
+    {
+        var g = new DependencyGraph();
+        g.SetNameTarget("N", R("A1:A3"));
+        g.SetDependencies(K("C1"), new FormulaDeps(Keys("A1", "A2"), [R("A1:A5")], ["N"]));
+        g.SetDependencies(K("C2"), Names("N"));
+        g.SetDependencies(K("C3"), Ranges("A4:A9"));
+        g.SetDependencies(K("C4"), Cells("Z1"));
+        var got = g.DistinctDirectDependentsOfMany(Keys("A1", "A2", "A3", "A4", "A1")).ToList();
+        Assert.Equal(got.Count, got.Distinct().Count());
+        Assert.Equal(new HashSet<int>(Keys("C1", "C2", "C3")), got.ToHashSet());
+    }
+
+    [Fact]
+    public void Plan_DuplicateChangedKeys_Deduped()
+    {
+        var g = new DependencyGraph();
+        g.SetDependencies(K("B1"), Cells("A1"));
+        var p = new RecalcPlanner(g).Plan(Keys("A1", "A1", "B1", "B1"), ["X", "X"], k => k == K("B1"));
+        Assert.Equal(Keys("B1"), p.Order);
     }
 
     [Fact]
