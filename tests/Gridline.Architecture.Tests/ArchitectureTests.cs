@@ -20,9 +20,8 @@ public class ArchitectureTests
     private static void AssertNoDependency(Assembly asm, string ns, params string[] forbidden)
     {
         var selected = Types.InAssembly(asm).That().ResideInNamespace(ns);
-        // Guard: a rule over an empty selection passes vacuously. Commands is the only namespace allowed to be empty.
-        if (ns != "Gridline.Core.Commands")
-            Assert.NotEmpty(selected.GetTypes());
+        // Guard: a rule over an empty selection passes vacuously.
+        Assert.NotEmpty(selected.GetTypes());
         var result = selected
             .ShouldNot().HaveDependencyOnAny(forbidden)
             .GetResult();

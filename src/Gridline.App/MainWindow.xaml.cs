@@ -26,20 +26,20 @@ public partial class MainWindow : Window
     {
         var dlg = new OpenFileDialog { Filter = FileFilter };
         if (dlg.ShowDialog(this) != true) return;
-        Run(() => _session.Open(dlg.FileName));
+        Report(_session.TryOpen(dlg.FileName, out var err), err);
     }
 
     private void OnSave(object s, ExecutedRoutedEventArgs e)
     {
         if (_session.FilePath is null) OnSaveAs(s, e);
-        else Run(_session.Save);
+        else Report(_session.TrySave(out var err), err);
     }
 
     private void OnSaveAs(object s, ExecutedRoutedEventArgs e)
     {
         var dlg = new SaveFileDialog { Filter = FileFilter, DefaultExt = ".gridline" };
         if (dlg.ShowDialog(this) != true) return;
-        Run(() => _session.SaveAs(dlg.FileName));
+        Report(_session.TrySaveAs(dlg.FileName, out var err), err);
     }
 
     private void OnUndo(object s, ExecutedRoutedEventArgs e) => _session.Workbook.Undo();
@@ -48,13 +48,8 @@ public partial class MainWindow : Window
     private void CanRedo(object s, CanExecuteRoutedEventArgs e) => e.CanExecute = _session.Workbook.CanRedo;
     private void OnExit(object s, ExecutedRoutedEventArgs e) => Close();
 
-    private void Run(Action action)
+    private void Report(bool ok, string? error)
     {
-        try { action(); }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException
-                                       or FormatException or ArgumentException)
-        {
-            MessageBox.Show(this, ex.Message, "Gridline", MessageBoxButton.OK, MessageBoxImage.Error);
-        }
+        if (!ok) MessageBox.Show(this, error, "Gridline", MessageBoxButton.OK, MessageBoxImage.Error);
     }
 }

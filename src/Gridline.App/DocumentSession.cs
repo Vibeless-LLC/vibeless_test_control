@@ -41,6 +41,24 @@ public sealed class DocumentSession
 
     public void SaveAs(string path) => SaveTo(path);
 
+    /// <summary>Like <see cref="Open"/> but reports expected failures as a message; the session is unchanged on failure.</summary>
+    public bool TryOpen(string path, out string? error) => Try(() => Open(path), out error);
+
+    public bool TrySave(out string? error) => Try(Save, out error);
+
+    public bool TrySaveAs(string path, out string? error) => Try(() => SaveAs(path), out error);
+
+    private static bool Try(Action action, out string? error)
+    {
+        try { action(); error = null; return true; }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or GridlineFormatException
+                                       or ArgumentException or NotSupportedException)
+        {
+            error = ex.Message;
+            return false;
+        }
+    }
+
     private void SaveTo(string path)
     {
         GridlineFile.SaveToPath(_workbook, path);
