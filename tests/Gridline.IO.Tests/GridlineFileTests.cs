@@ -83,6 +83,7 @@ public class GridlineFileTests
         Assert.Equal((byte)'\n', bytes[^1]);
         var wb = GridlineFile.Load(bytes);
         Assert.Equal(bytes, GridlineFile.SerializeToUtf8(wb));
+        AssertFreshHistory(wb);
     }
 
     [Fact]
@@ -91,6 +92,7 @@ public class GridlineFileTests
         var wb = GridlineFile.Load(SpecExampleBytes());
         Assert.Equal(new[] { KeyValuePair.Create("Rate", "$B$1"), KeyValuePair.Create("Total", "$A$1:$A$10") }, wb.GetNames());
         Assert.Equal("N:25", wb.GetValue("A1").ToCanonicalString());
+        AssertFreshHistory(wb);
     }
 
     [Fact]
@@ -122,6 +124,15 @@ public class GridlineFileTests
         var wb = GridlineFile.Load(GridlineFile.SerializeToUtf8(Sample()));
         Assert.Equal("=SUM(B1:B3)", wb.GetInput("A1"));
         Assert.Equal(5.0, wb.GetValue("A1").Number);
+        AssertFreshHistory(wb);
+    }
+
+    /// <summary>A loaded workbook is clean with empty history (§9.3).</summary>
+    private static void AssertFreshHistory(Workbook wb)
+    {
+        Assert.False(wb.IsDirty);
+        Assert.False(wb.CanUndo);
+        Assert.False(wb.CanRedo);
     }
 
     [Fact]
@@ -129,6 +140,7 @@ public class GridlineFileTests
     {
         var wb = GridlineFile.Load("{\"cells\":[[\"a1\",\"\\u0031\"]],\"version\":1,\"format\":\"gridline\",\"extra\":0}"u8);
         Assert.Equal("1", wb.GetInput("A1"));
+        AssertFreshHistory(wb);
     }
 
     [Fact]
@@ -136,6 +148,7 @@ public class GridlineFileTests
     {
         var wb = GridlineFile.Load("{\"format\":\"gridline\",\"version\":1}"u8);
         Assert.Empty(wb.GetUsedAddresses());
+        AssertFreshHistory(wb);
     }
 
     [Theory]
@@ -195,7 +208,9 @@ public class GridlineFileTests
             GridlineFile.SaveToPath(wb, path);
             Assert.Equal(GridlineFile.SerializeToUtf8(wb), File.ReadAllBytes(path));
             Assert.Single(Directory.GetFiles(dir));
-            Assert.Equal("5", GridlineFile.LoadFromPath(path).GetInput("B1"));
+            var loaded = GridlineFile.LoadFromPath(path);
+            Assert.Equal("5", loaded.GetInput("B1"));
+            AssertFreshHistory(loaded);
         }
         finally { Directory.Delete(dir, true); }
     }

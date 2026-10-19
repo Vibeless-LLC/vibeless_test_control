@@ -1,4 +1,5 @@
 using Gridline.Core.Addressing;
+using Gridline.Core.Commands;
 using Gridline.Core.Dependencies;
 using Gridline.Core.Evaluation;
 using Gridline.Core.Functions;
@@ -18,9 +19,6 @@ public sealed class Workbook
 
     private static readonly CellValue Circ = CellValue.FromError(ErrorCodes.Circ);
 
-    /// <summary>One input assignment; an empty input clears the cell.</summary>
-    private readonly record struct Edit(int Key, string Input);
-
     /// <summary>
     /// A defined name (§9.6): its defined casing, canonical <c>refersTo</c>, and target (null when
     /// <c>refersTo</c> is <c>#REF!</c>).
@@ -35,6 +33,8 @@ public sealed class Workbook
     private readonly EvalContext _ctx;
     private readonly Func<int, bool> _isFormula;
     private readonly Dictionary<string, NameDef> _names = new(StringComparer.OrdinalIgnoreCase);
+    private readonly UndoHistory _history = new(UndoLimit);
+    private long _lastStepId;
 
     public Workbook()
     {
@@ -89,7 +89,7 @@ public sealed class Workbook
         var formulaKeys = new HashSet<int>();
         for (int i = 0; i < cells.Count; i++)
         {
-            wb.Apply(keys[i], cells[i].Value, inputChanged: null);
+            wb.Apply(keys[i], cells[i].Value);
             if (wb.IsFormula(keys[i])) formulaKeys.Add(keys[i]);
         }
         var plan = wb._planner.PlanAll(formulaKeys);
@@ -97,12 +97,105 @@ public sealed class Workbook
         return wb;
     }
 
-    /// <summary>Sets a cell's input; <c>""</c> clears it. Recalculates its dependents before returning.</summary>
+    /// <summary>
+    /// Sets a cell's input; <c>""</c> clears it. Recalculates its dependents before returning. One undo step, unless
+    /// the input is unchanged (then no step, no event, not dirty; the cell and its dependents are still re-evaluated).
+    /// </summary>
     public void SetCell(string address, string input)
     {
         int key = ParseKey(address, nameof(address));
         ValidateInput(input, nameof(input));
-        Commit([new Edit(key, input)]);
+        string old = CurrentInput(key);
+        if (string.Equals(old, input, StringComparison.Ordinal))
+        {
+            // Phase 1 behaviour kept (§9.2): {X} ∪ dependents(X) are re-evaluated; values cannot change.
+            var valueChanged = new List<int>();
+            LastRecalc = new RecalcStats(Evaluate(_planner.Plan([key], [], _isFormula), valueChanged));
+            Raise(valueChanged);
+            return;
+        }
+        Commit([new CellEdit(key, old, input)], newNames: null, record: true);
+    }
+
+    /// <summary>
+    /// Applies several inputs as one mutation and one undo step (§9.3). Addresses are case-insensitive and the last
+    /// edit of an address wins. Every address and input is validated before anything is applied. A batch that
+    /// changes no input (including an empty batch) creates no step.
+    /// </summary>
+    public void ApplyBatch(IReadOnlyList<KeyValuePair<string, string>> edits)
+    {
+        ArgumentNullException.ThrowIfNull(edits);
+        var keys = new int[edits.Count];
+        for (int i = 0; i < edits.Count; i++)
+        {
+            keys[i] = ParseKey(edits[i].Key, nameof(edits));
+            ValidateInput(edits[i].Value, nameof(edits));
+        }
+
+        // Last wins; each key keeps the position of its first occurrence. OldInput is the pre-commit input.
+        var slot = new Dictionary<int, int>(edits.Count);
+        var list = new List<CellEdit>(edits.Count);
+        for (int i = 0; i < edits.Count; i++)
+        {
+            var e = new CellEdit(keys[i], CurrentInput(keys[i]), edits[i].Value);
+            if (slot.TryGetValue(keys[i], out int j)) list[j] = e;
+            else { slot[keys[i]] = list.Count; list.Add(e); }
+        }
+        Commit(list, newNames: null, record: true);
+    }
+
+    /// <summary>True when there is a step to undo (§9.3).</summary>
+    public bool CanUndo => _history.CanUndo;
+
+    /// <summary>True when there is an undone step to redo (§9.3).</summary>
+    public bool CanRedo => _history.CanRedo;
+
+    /// <summary>True when the history position differs from the one recorded by <see cref="MarkSaved"/> (§9.3).</summary>
+    public bool IsDirty => _history.IsDirty;
+
+    /// <summary>Records the current history position as saved (§9.3).</summary>
+    public void MarkSaved() => _history.MarkSaved();
+
+    /// <summary>Restores the exact inputs and names from before the most recent step; false if there is none.</summary>
+    public bool Undo()
+    {
+        if (!_history.TryUndo(out var step)) return false;
+        var edits = new CellEdit[step.Cells.Count];
+        for (int i = 0; i < edits.Length; i++)
+            edits[i] = new CellEdit(step.Cells[i].Key, CurrentInput(step.Cells[i].Key), step.Cells[i].OldInput);
+        Commit(edits, step.NamesBefore, record: false);
+        return true;
+    }
+
+    /// <summary>Reapplies the most recently undone step; false if there is none.</summary>
+    public bool Redo()
+    {
+        if (!_history.TryRedo(out var step)) return false;
+        var edits = new CellEdit[step.Cells.Count];
+        for (int i = 0; i < edits.Length; i++)
+            edits[i] = new CellEdit(step.Cells[i].Key, CurrentInput(step.Cells[i].Key), step.Cells[i].NewInput);
+        Commit(edits, step.NamesAfter, record: false);
+        return true;
+    }
+
+    /// <summary>
+    /// Replaces all defined names as one mutation and one undo step (none if identical, casing included). Validates
+    /// every name and <c>refersTo</c> (§9.6) and rejects case-insensitive duplicates before changing anything.
+    /// Phase 3 <c>DefineName</c>/<c>DeleteName</c> route through here.
+    /// </summary>
+    internal void ReplaceNames(IReadOnlyList<KeyValuePair<string, string>> names)
+    {
+        ArgumentNullException.ThrowIfNull(names);
+        var canonical = new KeyValuePair<string, string>[names.Count];
+        var seen = new HashSet<string>(names.Count, StringComparer.OrdinalIgnoreCase);
+        for (int i = 0; i < names.Count; i++)
+        {
+            var d = ParseName(names[i].Key, names[i].Value, nameof(names));
+            if (!seen.Add(d.Name)) throw new ArgumentException($"Duplicate name: '{d.Name}'", nameof(names));
+            canonical[i] = new(d.Name, d.RefersTo);
+        }
+        Array.Sort(canonical, static (a, b) => StringComparer.OrdinalIgnoreCase.Compare(a.Key, b.Key));
+        Commit([], canonical, record: true);
     }
 
     /// <summary>The exact input of the cell, or <c>""</c> if blank.</summary>
@@ -152,27 +245,89 @@ public sealed class Workbook
     }
 
     /// <summary>
-    /// The single mutation path: applies all edits (already validated), then plans and evaluates once, sets
-    /// <see cref="LastRecalc"/> and raises <see cref="CellsChanged"/>. Batch/undo (Phase 2) route through here.
+    /// The single mutation path (§9.2, §9.3). <paramref name="edits"/> are validated, have distinct keys and carry the
+    /// current input as <c>OldInput</c>; no-op edits are dropped. <paramref name="newNames"/> is the complete sorted
+    /// name list to install (validated, canonical), or null to leave names alone; an identical list is a no-op.
+    /// If anything changed: applies inputs and names, plans and evaluates once over all changed keys and names, raises
+    /// <see cref="CellsChanged"/> once, and pushes one undo step when <paramref name="record"/> is true.
+    /// <see cref="LastRecalc"/> is always set (0 when nothing changed).
     /// </summary>
-    private void Commit(IReadOnlyList<Edit> edits)
+    private void Commit(IReadOnlyList<CellEdit> edits, IReadOnlyList<KeyValuePair<string, string>>? newNames, bool record)
     {
-        var changed = new List<int>();
-        var keys = new int[edits.Count];
-        for (int i = 0; i < edits.Count; i++)
+        var real = new List<CellEdit>(edits.Count);
+        foreach (var e in edits)
+            if (!string.Equals(e.OldInput, e.NewInput, StringComparison.Ordinal)) real.Add(e);
+
+        IReadOnlyList<KeyValuePair<string, string>>? namesBefore = null;
+        if (newNames is not null)
         {
-            keys[i] = edits[i].Key;
-            Apply(edits[i].Key, edits[i].Input, changed);
+            var current = GetNames();
+            if (SameNames(current, newNames)) newNames = null;
+            else namesBefore = current;
         }
 
+        if (real.Count == 0 && newNames is null)
+        {
+            LastRecalc = new RecalcStats(0);
+            return;
+        }
+
+        var changed = new List<int>(real.Count);
+        var keys = new int[real.Count];
+        for (int i = 0; i < real.Count; i++)
+        {
+            keys[i] = real[i].Key;
+            Apply(real[i].Key, real[i].NewInput);
+            changed.Add(real[i].Key);
+        }
+        List<string> changedNames = newNames is null ? [] : InstallNames(newNames);
+
         // The graph is fully updated before planning and is not touched while the plan is produced or evaluated.
-        var plan = _planner.Plan(keys, [], _isFormula);
+        var plan = _planner.Plan(keys, changedNames, _isFormula);
         LastRecalc = new RecalcStats(Evaluate(plan, changed));
         Raise(changed);
+
+        if (record) _history.Push(new EditStep(++_lastStepId, real.ToArray(), namesBefore, newNames));
     }
 
-    /// <summary>Interprets and stores one input, updating the dependency graph. Records the key if its input changed.</summary>
-    private void Apply(int key, string input, List<int>? inputChanged)
+    private static bool SameNames(IReadOnlyList<KeyValuePair<string, string>> a, IReadOnlyList<KeyValuePair<string, string>> b)
+    {
+        if (a.Count != b.Count) return false;
+        for (int i = 0; i < a.Count; i++)
+            if (!string.Equals(a[i].Key, b[i].Key, StringComparison.Ordinal) || !string.Equals(a[i].Value, b[i].Value, StringComparison.Ordinal))
+                return false;
+        return true;
+    }
+
+    /// <summary>
+    /// Replaces all names with <paramref name="names"/> (validated) and returns the upper-cased names whose target
+    /// changed, appeared or disappeared, for the recalc plan. A removed name keeps its graph node (and dependents)
+    /// with no target, so redefining it later reconnects its formulas.
+    /// </summary>
+    private List<string> InstallNames(IReadOnlyList<KeyValuePair<string, string>> names)
+    {
+        var old = new Dictionary<string, NameDef>(_names, StringComparer.OrdinalIgnoreCase);
+        _names.Clear();
+        var changed = new List<string>();
+        foreach (var (name, refersTo) in names)
+        {
+            var d = ParseName(name, refersTo, nameof(names));
+            AddName(d);
+            if (!old.Remove(name, out var prev) || prev.Target != d.Target) changed.Add(name.ToUpperInvariant());
+        }
+        foreach (var gone in old.Keys)
+        {
+            string upper = gone.ToUpperInvariant();
+            _graph.SetNameTarget(upper, null);
+            changed.Add(upper);
+        }
+        return changed;
+    }
+
+    private string CurrentInput(int key) => _store.TryGet(key, out var c) ? c.Input : "";
+
+    /// <summary>Interprets and stores one input, updating the dependency graph.</summary>
+    private void Apply(int key, string input)
     {
         bool hadCell = _store.TryGet(key, out var old);
         var cell = InputInterpreter.Interpret(input, _arity);
@@ -188,9 +343,6 @@ public sealed class Workbook
 
         if (cell is null) _store.Remove(key);
         else _store.Set(key, cell);
-
-        if (inputChanged is not null && !string.Equals(hadCell ? old.Input : "", input, StringComparison.Ordinal))
-            inputChanged.Add(key);
     }
 
     /// <summary>
