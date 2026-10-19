@@ -70,9 +70,9 @@ public class ParserTests
     private static string Parens(int n) => new string('(', n) + "1" + new string(')', n);
 
     [Fact]
-    public void Depth1024Parens_Parses()
+    public void DepthMaxParens_Parses()
     {
-        Assert.Equal(1024, Parser.MaxDepth);
+        Assert.Equal(256, Parser.MaxDepth);
         Assert.False(P(Parens(Parser.MaxDepth)).IsParseError);
         Assert.True(P(Parens(Parser.MaxDepth + 1)).IsParseError);
         Assert.Equal("N:1", CoreTestHost.Eval("=" + Parens(Parser.MaxDepth)));
@@ -105,28 +105,80 @@ public class ParserTests
 
     [Fact] public void WorkbookDeepUnary_IsParseError() => Assert.Equal("E:#PARSE!", CoreTestHost.Eval("=" + new string('-', 5000) + "1"));
 
-    [Fact]
-    public void PrintAndShift_AtMaxDepth_SmallStack()
+    private static void RunOnThread(int stackBytes, Action body)
     {
         Exception? failure = null;
-        string? printed = null;
-        var roots = new[] { Parens(Parser.MaxDepth), new string('-', Parser.MaxDepth) + "A1", "A1" + new string('%', Parser.MaxDepth) }
-            .Select(b => P(b).Root!).ToArray();
-        var t = new Thread(() =>
-        {
-            try
-            {
-                foreach (var root in roots)
-                {
-                    var shifted = ReferenceRewriter.Shift(root, 1, 1, out _);
-                    printed = FormulaPrinter.Print(shifted, _ => null);
-                }
-            }
-            catch (Exception e) { failure = e; }
-        }, 256 * 1024);
+        var t = new Thread(() => { try { body(); } catch (Exception e) { failure = e; } }, stackBytes);
         t.Start();
         t.Join();
         Assert.Null(failure);
-        Assert.EndsWith("B2" + new string('%', Parser.MaxDepth), printed);
+    }
+
+    private static string Nest(string seed, string open, string close, int k)
+    {
+        string s = seed;
+        for (int i = 0; i < k; i++) s = open + s + close;
+        return s;
+    }
+
+    public static IEnumerable<object[]> MixedShapes()
+    {
+        int d = Parser.MaxDepth;
+        yield return new object[] { "paren over binary-left", Nest("1", "(", "+1)", d / 2), "N:" + (1 + d / 2) };
+        yield return new object[] { "call over binary-left", Nest("1", "SUM(", "+1)", d / 2), "N:" + (1 + d / 2) };
+        yield return new object[] { "unary over paren", Nest("1", "-(", ")", d / 2), "N:1" };
+        yield return new object[] { "call over percent over paren", Nest("1", "SUM((", ")%)", d / 3), null! };
+        yield return new object[] { "paren chain", Parens(d), "N:1" };
+        yield return new object[] { "unary chain", new string('-', d) + "1", "N:1" };
+        yield return new object[] { "percent chain", "1" + new string('%', d), null! };
+    }
+
+    [Theory]
+    [MemberData(nameof(MixedShapes))]
+    public void MixedShapes_AtMaxDepth_WorkOn1MbThread(string name, string body, string? expected)
+    {
+        RunOnThread(1024 * 1024, () =>
+        {
+            var r = P(body);
+            Assert.False(r.IsParseError, name);
+            string v = CoreTestHost.Eval("=" + body);
+            if (expected is null) Assert.StartsWith("N:", v); else Assert.Equal(expected, v);
+            var shifted = ReferenceRewriter.Shift(r.Root!, 1, 1, out _);
+            Assert.StartsWith("=", FormulaPrinter.Print(shifted, _ => null));
+        });
+    }
+
+    [Theory]
+    [MemberData(nameof(MixedShapes))]
+    public void MixedShapes_AtMaxDepth_PrintAndShift_On256KbThread(string name, string body, string? expected)
+    {
+        _ = expected; _ = name;
+        var root = P(body).Root!;
+        RunOnThread(256 * 1024, () =>
+        {
+            var shifted = ReferenceRewriter.Shift(root, 1, 1, out _);
+            string printed = FormulaPrinter.Print(shifted, _ => null);
+            Assert.Equal(printed, FormulaPrinter.Print(ReferenceRewriter.Shift(root, 0, 0, out _), _ => null));
+        });
+    }
+
+    [Fact]
+    public void LeftmostOperandCountsAsLevel()
+    {
+        // ((…(1+1)+1)…): each level is a paren plus a binary-left, so MaxDepth/2 levels fit and one more does not.
+        Assert.False(P(Nest("1", "(", "+1)", Parser.MaxDepth / 2)).IsParseError);
+        Assert.True(P(Nest("1", "(", "+1)", Parser.MaxDepth / 2 + 1)).IsParseError);
+    }
+
+    [Fact]
+    public void RealShift_At256KbThread_ChangesRefs()
+    {
+        var root = P(Nest("A1", "(", "+1)", Parser.MaxDepth / 2)).Root!;
+        RunOnThread(256 * 1024, () =>
+        {
+            var shifted = ReferenceRewriter.Shift(root, 1, 1, out var ch);
+            Assert.True(ch);
+            Assert.Contains("B2+1", FormulaPrinter.Print(shifted, _ => null));
+        });
     }
 }

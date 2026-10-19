@@ -41,6 +41,7 @@ internal static class FormulaPrinter
         }
     }
 
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
     private static void WriteCall(StringBuilder sb, CallNode c, Func<string, string?> nameCasing)
     {
         sb.Append(c.Name.ToUpperInvariant()).Append('(');
@@ -52,6 +53,7 @@ internal static class FormulaPrinter
         sb.Append(')');
     }
 
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
     private static void WriteBinary(StringBuilder sb, BinaryNode bn, Func<string, string?> nameCasing)
     {
         // Iterate the left spine so a 16k-term chain does not overflow the stack.

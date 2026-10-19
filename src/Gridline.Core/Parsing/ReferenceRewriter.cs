@@ -76,6 +76,7 @@ internal static class ReferenceRewriter
         return new RangeNode(f, g);
     }
 
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
     private static Node WalkCall(CallNode c, int dRow, int dCol, ref bool changed)
     {
         var args = new Node?[c.Args.Count];
@@ -84,6 +85,7 @@ internal static class ReferenceRewriter
         return new CallNode(c.Name, args);
     }
 
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
     private static Node WalkBinary(BinaryNode bn, int dRow, int dCol, ref bool changed)
     {
         var spine = new List<BinaryNode>();

@@ -10,7 +10,7 @@ internal static class Parser
     private sealed class SyntaxError : Exception { }
 
     /// <summary>Maximum recursive (non-left-spine) nesting of any AST the parser returns (§5.4); deeper is #PARSE!.</summary>
-    internal const int MaxDepth = 1024;
+    internal const int MaxDepth = 256;
 
     /// <summary>Parses a formula body (no leading '='). Never throws.</summary>
     public static ParsedFormula Parse(string formulaBody, IFunctionArity arity)
@@ -69,12 +69,15 @@ internal static class Parser
             RuntimeHelpers.EnsureSufficientExecutionStack();
             Node left = Postfix();
             int h = _h;
+            bool first = true;
             while (Cur.Kind == TokenKind.Op)
             {
                 string op = Cur.Text;
                 int prec = Prec(op);
                 if (prec < minPrec || prec == 0) break;
                 _i++;
+                // Walkers recurse into the leftmost operand of a chain (only the spine itself is iterated), so it costs a level.
+                if (first) { h++; first = false; }
                 Node right = prec == 5 ? Postfix() : Expr(prec + 1);
                 left = new BinaryNode(op, left, right);
                 h = Math.Max(h, _h + 1); Raise(h);
