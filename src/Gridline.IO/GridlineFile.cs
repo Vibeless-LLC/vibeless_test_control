@@ -1,0 +1,172 @@
+using System.Text;
+using System.Text.Json;
+using Gridline.Core;
+
+namespace Gridline.IO;
+
+/// <summary>The .gridline JSON file format, version 1 (§8.1, §8.2, §8.4).</summary>
+public static class GridlineFile
+{
+    private const long CurrentVersion = 1;
+
+    /// <summary>Canonical text: LF line endings, trailing newline.</summary>
+    public static string Serialize(Workbook wb)
+    {
+        ArgumentNullException.ThrowIfNull(wb);
+        var sb = new StringBuilder();
+        sb.Append("{\n  \"format\": \"gridline\",\n  \"version\": 1,\n");
+
+        var names = wb.GetNames().OrderBy(n => n.Key, StringComparer.OrdinalIgnoreCase).ToList();
+        if (names.Count == 0) sb.Append("  \"names\": {},\n");
+        else
+        {
+            sb.Append("  \"names\": {\n");
+            for (int i = 0; i < names.Count; i++)
+            {
+                sb.Append("    ");
+                JsonEscaper.Append(sb, names[i].Key);
+                sb.Append(": ");
+                JsonEscaper.Append(sb, names[i].Value);
+                sb.Append(i + 1 < names.Count ? ",\n" : "\n");
+            }
+            sb.Append("  },\n");
+        }
+
+        var addrs = wb.GetUsedAddresses();
+        if (addrs.Count == 0) sb.Append("  \"cells\": []\n");
+        else
+        {
+            sb.Append("  \"cells\": [\n");
+            for (int i = 0; i < addrs.Count; i++)
+            {
+                sb.Append("    [");
+                JsonEscaper.Append(sb, addrs[i]);
+                sb.Append(", ");
+                JsonEscaper.Append(sb, wb.GetInput(addrs[i]));
+                sb.Append(i + 1 < addrs.Count ? "],\n" : "]\n");
+            }
+            sb.Append("  ]\n");
+        }
+        sb.Append("}\n");
+        return sb.ToString();
+    }
+
+    /// <summary>Canonical text as UTF-8 without a BOM.</summary>
+    public static byte[] SerializeToUtf8(Workbook wb) => new UTF8Encoding(false).GetBytes(Serialize(wb));
+
+    public static Workbook Load(ReadOnlySpan<byte> utf8Json)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(utf8Json.ToArray());
+            return Build(doc.RootElement);
+        }
+        catch (JsonException ex)
+        {
+            throw new GridlineFormatException("malformed JSON: " + ex.Message, ex);
+        }
+        catch (ArgumentException ex)
+        {
+            throw new GridlineFormatException("invalid workbook: " + ex.Message, ex);
+        }
+    }
+
+    public static Workbook LoadFromPath(string path) => Load(File.ReadAllBytes(path));
+
+    /// <summary>Writes to a temp file in the same directory, flushes to disk, then replaces the target (§8.4).</summary>
+    public static void SaveToPath(Workbook wb, string path)
+    {
+        ArgumentNullException.ThrowIfNull(wb);
+        ArgumentNullException.ThrowIfNull(path);
+        var bytes = SerializeToUtf8(wb);
+        var tmp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        try
+        {
+            using (var fs = new FileStream(tmp, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+            {
+                fs.Write(bytes, 0, bytes.Length);
+                fs.Flush(flushToDisk: true);
+            }
+            File.Move(tmp, path, overwrite: true);
+        }
+        catch
+        {
+            try { File.Delete(tmp); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Reads a JSON string value. System.Text.Json refuses strings with an unpaired surrogate escape
+    /// (<c>\ud83d</c>), which the writer legitimately emits for lone surrogates, so fall back to manual unescaping.
+    /// </summary>
+    private static string Str(JsonElement e)
+    {
+        try { return e.GetString()!; }
+        catch (InvalidOperationException) { }
+
+        var raw = e.GetRawText();
+        var sb = new StringBuilder(raw.Length);
+        for (int i = 1; i < raw.Length - 1; i++)
+        {
+            char c = raw[i];
+            if (c != '\\') { sb.Append(c); continue; }
+            char n = raw[++i];
+            switch (n)
+            {
+                case 'b': sb.Append('\b'); break;
+                case 'f': sb.Append('\f'); break;
+                case 'n': sb.Append('\n'); break;
+                case 'r': sb.Append('\r'); break;
+                case 't': sb.Append('\t'); break;
+                case 'u':
+                    sb.Append((char)Convert.ToInt32(raw.Substring(i + 1, 4), 16));
+                    i += 4;
+                    break;
+                default: sb.Append(n); break; // " \ /
+            }
+        }
+        return sb.ToString();
+    }
+
+    private static Workbook Build(JsonElement root)
+    {
+        if (root.ValueKind != JsonValueKind.Object) throw new GridlineFormatException("root must be an object");
+
+        if (!root.TryGetProperty("format", out var format) || format.ValueKind != JsonValueKind.String || format.GetString() != "gridline")
+            throw new GridlineFormatException("format must be \"gridline\"");
+
+        if (!root.TryGetProperty("version", out var ver) || ver.ValueKind != JsonValueKind.Number || !ver.TryGetInt64(out long version))
+            throw new GridlineFormatException("version missing or not an integer");
+        if (version > CurrentVersion) throw new GridlineFormatException("unsupported version " + version);
+        if (version < CurrentVersion) throw new GridlineFormatException("invalid version " + version);
+
+        var names = new List<KeyValuePair<string, string>>();
+        if (root.TryGetProperty("names", out var namesEl))
+        {
+            if (namesEl.ValueKind != JsonValueKind.Object) throw new GridlineFormatException("names must be an object");
+            foreach (var p in namesEl.EnumerateObject())
+            {
+                if (p.Value.ValueKind != JsonValueKind.String) throw new GridlineFormatException("name target must be a string");
+                names.Add(new(p.Name, Str(p.Value)));
+            }
+        }
+
+        var cells = new List<KeyValuePair<string, string>>();
+        if (root.TryGetProperty("cells", out var cellsEl))
+        {
+            if (cellsEl.ValueKind != JsonValueKind.Array) throw new GridlineFormatException("cells must be an array");
+            foreach (var e in cellsEl.EnumerateArray())
+            {
+                if (e.ValueKind != JsonValueKind.Array || e.GetArrayLength() != 2) throw new GridlineFormatException("cell entry must be a two-string array");
+                var a = e[0];
+                var b = e[1];
+                if (a.ValueKind != JsonValueKind.String || b.ValueKind != JsonValueKind.String)
+                    throw new GridlineFormatException("cell entry must be a two-string array");
+                cells.Add(new(Str(a), Str(b)));
+            }
+        }
+
+        return Workbook.FromSnapshot(cells, names);
+    }
+}

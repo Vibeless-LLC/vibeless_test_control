@@ -84,3 +84,12 @@ Non-trivial implementation choices, with spec section references.
 - **CellsChanged** is built only when a handler is attached: changed keys (input changed, or value changed by `CellValue.Equals`) are sorted, deduplicated and converted to canonical addresses in a fresh array.
 - **FromSnapshot validation (§9.1).** All addresses, input lengths and duplicates (by cell key, so case-insensitive and `$`-insensitive) are checked before anything is built; an `""` input still counts for duplicates. A non-empty `names` list throws `ArgumentException("names are not supported yet")` until Phase 3. `GetNames()` returns an empty list.
 - **CoreTestHost (tests)** now uses the real `Workbook`: inputs are set in order, then the formula is set in Z100.
+
+## Task 11: .gridline format and atomic save
+
+- **Writer is hand-built (§8.1).** `GridlineFile.Serialize` appends to a `StringBuilder` using `JsonEscaper`, never `JsonSerializer`, so the bytes are exactly the spec layout (UTF-8 no BOM, LF, trailing `\n`).
+- **Lone surrogates (§8.1).** `SetCell` accepts them and they cannot be UTF-8 encoded, so `JsonEscaper` writes them as `\udxxx` (lowercase hex); valid pairs are written literally. `System.Text.Json` refuses to read such a string (`GetString` throws `InvalidOperationException`), so the loader falls back to manually unescaping the raw token. The FsCheck round-trip property includes lone surrogates.
+- **Missing keys (§8.2).** A missing `cells` or `names` key is treated as empty. If present, `names` must be an object with string values and `cells` an array, else `GridlineFormatException`.
+- **Version (§8.2).** Accepted only if a JSON number that `TryGetInt64` accepts (so `1.5` and `"1"` fail; `1.0` is also accepted by STJ's TryGetInt64 for integral values). `version > 1` gives a message containing `unsupported version`; `version < 1` gives `GridlineFormatException` ("invalid version").
+- **Names in Phase 1 (§8.2).** Entries of `names` are passed to `Workbook.FromSnapshot`, which rejects any in Phase 1; the `ArgumentException` is wrapped as `GridlineFormatException`.
+- **Save (§8.4).** Temp file `path.<guid>.tmp` in the target directory (`FileMode.CreateNew`), `Flush(flushToDisk: true)`, `File.Move(tmp, path, overwrite: true)`; the temp is deleted best-effort on failure.
