@@ -97,6 +97,62 @@ public sealed class CliAppTests : IDisposable
         Assert.Equal(2, Run("", "set", P("nope"), "A1", "1").code);
     }
 
+    private static void AssertSingleLineError(string stderr)
+    {
+        Assert.StartsWith("error: ", stderr);
+        Assert.EndsWith("\n", stderr);
+        Assert.Single(stderr.TrimEnd('\n').Split('\n'));
+        Assert.DoesNotContain("\r", stderr);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("a\0b")]
+    public void Eval_InvalidPath_Exit2(string path)
+    {
+        var r = Run("", "eval", path, "A1");
+        Assert.Equal(2, r.code);
+        Assert.Equal("", r.stdout);
+        AssertSingleLineError(r.stderr);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("a\0b")]
+    public void Set_InvalidOutPath_Exit2_SourceUntouched_NoTempLeft(string outPath)
+    {
+        var f = MakeFile("f.gridline", ("A1", "1"));
+        var before = File.ReadAllBytes(f);
+        string cwd = Directory.GetCurrentDirectory();
+        var cwdBefore = Directory.GetFiles(cwd, "*.tmp").ToHashSet();
+
+        var r = Run("", "set", f, "A1", "x", "--out", outPath);
+
+        Assert.Equal(2, r.code);
+        AssertSingleLineError(r.stderr);
+        Assert.Equal(before, File.ReadAllBytes(f));
+        Assert.Equal([f], Directory.GetFiles(_dir));
+        Assert.Subset(cwdBefore, Directory.GetFiles(cwd, "*.tmp").ToHashSet());
+    }
+
+    [Fact]
+    public void Set_InvalidSourcePath_Exit2()
+    {
+        var r = Run("", "set", "", "A1", "x");
+        Assert.Equal(2, r.code);
+        AssertSingleLineError(r.stderr);
+    }
+
+    [Fact]
+    public void Set_InvalidAddress_CheckedBeforeLoad_Exit5()
+    {
+        // §10.1: like eval, an invalid address wins over a missing or malformed file.
+        Assert.Equal(5, Run("", "set", P("nope.gridline"), "A0", "1").code);
+        var bad = P("bad.gridline");
+        File.WriteAllText(bad, "not json");
+        Assert.Equal(5, Run("", "set", bad, "A0", "1").code);
+    }
+
     [Fact]
     public void Usage_Exit1()
     {

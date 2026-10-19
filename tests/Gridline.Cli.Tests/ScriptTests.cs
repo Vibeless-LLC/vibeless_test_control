@@ -32,6 +32,22 @@ public sealed class ScriptTests : IDisposable
     }
 
     [Fact]
+    public void Script_LeadingBom_Stripped()
+    {
+        var r = Run((char)0xFEFF + "SET A1 1\nGET A1\n", "script");
+        Assert.Equal(0, r.code);
+        Assert.Equal("A1\tN:1\n", r.stdout);
+    }
+
+    [Fact]
+    public void Script_WhitespaceOnlyLines_Ignored()
+    {
+        var r = Run("SET A1 1\n   \n\t\n \r\nGET A1\n", "script");
+        Assert.Equal(0, r.code);
+        Assert.Equal("A1\tN:1\n", r.stdout);
+    }
+
+    [Fact]
     public void Script_CrLfLines() => Assert.Equal("A1\tN:1\n", Run("SET A1 1\r\nGET A1\r\n", "script").stdout);
 
     [Fact]

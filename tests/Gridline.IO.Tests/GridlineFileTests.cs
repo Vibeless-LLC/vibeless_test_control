@@ -164,6 +164,15 @@ public class GridlineFileTests
     }
 
     [Fact]
+    public void SaveToPath_EmptyPath_ThrowsBeforeWritingAnything()
+    {
+        var cwd = Directory.GetCurrentDirectory();
+        var before = Directory.GetFiles(cwd, "*.tmp").ToHashSet();
+        Assert.Throws<ArgumentException>(() => GridlineFile.SaveToPath(Sample(), ""));
+        Assert.Subset(before, Directory.GetFiles(cwd, "*.tmp").ToHashSet());
+    }
+
+    [Fact]
     public void LoadFromPath_Missing_Propagates() =>
         Assert.ThrowsAny<IOException>(() => GridlineFile.LoadFromPath(Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))));
 }

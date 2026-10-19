@@ -8,6 +8,7 @@ namespace Gridline.Cli;
 public static class CliApp
 {
     private const int Usage = 1, IoError = 2, FormatError = 3, ScriptErr = 4, BadAddress = 5;
+    private const char Bom = (char)0xFEFF;
 
     public static int Run(string[] args, TextReader stdin, TextWriter stdout, TextWriter stderr)
     {
@@ -24,6 +25,26 @@ public static class CliApp
         }
         catch (GridlineFormatException ex) { return Fail(stderr, FormatError, ex.Message); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return Fail(stderr, IoError, ex.Message); }
+    }
+
+    /// <summary>An unusable path (empty, embedded NUL, unsupported form): reported as an I/O error, exit 2 (§10.1).</summary>
+    private sealed class InvalidPathException(string path, Exception inner)
+        : IOException($"invalid path '{path}': {inner.Message}", inner);
+
+    private static Workbook LoadFile(string path)
+    {
+        byte[] bytes;
+        try { bytes = File.ReadAllBytes(path); }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException) { throw new InvalidPathException(path, ex); }
+        return GridlineFile.Load(bytes);
+    }
+
+    private static void SaveFile(Workbook wb, string path)
+    {
+        string full;
+        try { full = Path.GetFullPath(path); }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException) { throw new InvalidPathException(path, ex); }
+        GridlineFile.SaveToPath(wb, full);
     }
 
     internal static string OneLine(string s) => s.Replace("\r\n", " ").Replace('\n', ' ').Replace('\r', ' ').Replace('\t', ' ');
@@ -48,7 +69,7 @@ public static class CliApp
                 addrs.Add(a.ToString());
             }
         }
-        var wb = GridlineFile.LoadFromPath(file);
+        var wb = LoadFile(file);
         if (all) addrs.AddRange(wb.GetUsedAddresses());
         var sb = new System.Text.StringBuilder();
         foreach (var a in addrs) sb.Append(a).Append('\t').Append(wb.GetValue(a).ToCanonicalString()).Append('\n');
@@ -70,11 +91,12 @@ public static class CliApp
             else pos.Add(args[i]);
         }
         if (pos.Count != 3) return Fail(stderr, Usage, "usage: gridline set <file> <addr> <input> [--out <path>]");
-        var wb = GridlineFile.LoadFromPath(pos[0]);
+        // Arguments are validated before the file is touched, like eval: invalid address 5, input too long 1.
         if (!CellAddress.TryParse(pos[1], out var addr)) return Fail(stderr, BadAddress, "invalid address: " + pos[1]);
         if (pos[2].Length > Workbook.MaxInputLength) return Fail(stderr, Usage, "input exceeds " + Workbook.MaxInputLength + " characters");
+        var wb = LoadFile(pos[0]);
         wb.SetCell(addr.ToString(), pos[2]);
-        GridlineFile.SaveToPath(wb, outPath ?? pos[0]);
+        SaveFile(wb, outPath ?? pos[0]);
         return 0;
     }
 
@@ -83,8 +105,11 @@ public static class CliApp
         string? file = null;
         if (args.Length == 3 && args[1] == "--file") file = args[2];
         else if (args.Length != 1) return Fail(stderr, Usage, "usage: gridline script [--file <path>]");
-        var wb = file == null ? new Workbook() : GridlineFile.LoadFromPath(file);
+        var wb = file == null ? new Workbook() : LoadFile(file);
         var runner = new ScriptRunner(wb, stdout);
-        return runner.Run(stdin.ReadToEnd()) ? 0 : ScriptErr;
+        string text = stdin.ReadToEnd();
+        // A UTF-8 BOM on stdin (e.g. .NET's Encoding.UTF8 preamble) is not part of the first command (§10.3).
+        if (text.Length > 0 && text[0] == Bom) text = text[1..];
+        return runner.Run(text) ? 0 : ScriptErr;
     }
 }

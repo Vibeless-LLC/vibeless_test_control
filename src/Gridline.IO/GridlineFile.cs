@@ -86,6 +86,9 @@ public static class GridlineFile
     {
         ArgumentNullException.ThrowIfNull(wb);
         ArgumentNullException.ThrowIfNull(path);
+        // Resolve first: an empty or malformed path throws here, before any temp file exists, and the temp file
+        // always lands in the target's directory (never the working directory for a relative "" target).
+        path = Path.GetFullPath(path);
         var bytes = SerializeToUtf8(wb);
         var tmp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
         try

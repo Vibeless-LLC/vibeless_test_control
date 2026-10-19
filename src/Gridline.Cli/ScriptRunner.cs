@@ -24,7 +24,8 @@ internal sealed class ScriptRunner
         foreach (var raw in text.Split('\n'))
         {
             string line = raw.EndsWith('\r') ? raw[..^1] : raw;
-            if (line.Length == 0 || line[0] == '#') continue;
+            // Blank (empty or whitespace-only) lines and comments are ignored (§10.3).
+            if (string.IsNullOrWhiteSpace(line) || line[0] == '#') continue;
             try { Execute(line); }
             catch (Exception ex) when (ex is not OutOfMemoryException) { Err(ex.Message); }
         }
