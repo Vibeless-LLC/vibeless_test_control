@@ -155,6 +155,15 @@ public static class GridlineFile
         return sb.ToString();
     }
 
+    private static bool IsIntegerSpelling(string raw)
+    {
+        int i = raw.Length > 0 && raw[0] == '-' ? 1 : 0;
+        if (i == raw.Length) return false;
+        for (; i < raw.Length; i++)
+            if (raw[i] is < '0' or > '9') return false;
+        return true;
+    }
+
     private static Workbook Build(JsonElement root)
     {
         if (root.ValueKind != JsonValueKind.Object) throw new GridlineFormatException("root must be an object");
@@ -162,8 +171,16 @@ public static class GridlineFile
         if (!root.TryGetProperty("format", out var format) || format.ValueKind != JsonValueKind.String || Str(format) != "gridline")
             throw new GridlineFormatException("format must be \"gridline\"");
 
-        if (!root.TryGetProperty("version", out var ver) || ver.ValueKind != JsonValueKind.Number || !ver.TryGetInt64(out long version))
+        // An integer is spelled as digits with an optional leading '-' (no fraction or exponent). One too large
+        // for Int64 is still an integer, and a positive one is a future version.
+        if (!root.TryGetProperty("version", out var ver) || ver.ValueKind != JsonValueKind.Number || !IsIntegerSpelling(ver.GetRawText()))
             throw new GridlineFormatException("version missing or not an integer");
+        if (!ver.TryGetInt64(out long version))
+        {
+            string raw = ver.GetRawText();
+            if (raw[0] == '-') throw new GridlineFormatException("invalid version " + raw);
+            throw new GridlineFormatException("unsupported version " + raw);
+        }
         if (version > CurrentVersion) throw new GridlineFormatException("unsupported version " + version);
         if (version < CurrentVersion) throw new GridlineFormatException("invalid version " + version);
 

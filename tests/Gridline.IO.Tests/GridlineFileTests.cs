@@ -100,6 +100,22 @@ public class GridlineFileTests
     public void Load_FutureVersion_Message() =>
         Assert.Contains("unsupported version", Assert.Throws<GridlineFormatException>(() => GridlineFile.Load("{\"format\":\"gridline\",\"version\":2,\"cells\":[]}"u8)).Message);
 
+    [Theory]
+    [InlineData("99999999999999999999")]
+    [InlineData("9223372036854775808")]
+    [InlineData("2")]
+    public void Load_HugeOrFutureIntegerVersion_Unsupported(string v) =>
+        Assert.Contains("unsupported version", Assert.Throws<GridlineFormatException>(() =>
+            GridlineFile.Load(Encoding.UTF8.GetBytes("{\"format\":\"gridline\",\"version\":" + v + ",\"cells\":[]}"))).Message);
+
+    [Theory]
+    [InlineData("-99999999999999999999")]
+    [InlineData("99999999999999999999.0")]
+    [InlineData("1E20")]
+    public void Load_HugeNegativeOrNonIntegerVersion_NotUnsupported(string v) =>
+        Assert.DoesNotContain("unsupported version", Assert.Throws<GridlineFormatException>(() =>
+            GridlineFile.Load(Encoding.UTF8.GetBytes("{\"format\":\"gridline\",\"version\":" + v + ",\"cells\":[]}"))).Message);
+
     [Fact]
     public void Load_OverlongInput_Throws()
     {
