@@ -22,6 +22,49 @@ public class UndoTests
 
     // ---- Additional coverage ----
     [Fact]
+    public void CellsChanged_SeesFinalHistoryState()
+    {
+        var wb = new Workbook();
+        var seen = new List<(bool Dirty, bool CanUndo, bool CanRedo)>();
+        wb.CellsChanged += (_, _) => seen.Add((wb.IsDirty, wb.CanUndo, wb.CanRedo));
+        wb.SetCell("A1", "1");
+        wb.ApplyBatch([KV("B1", "2")]);
+        wb.Undo();
+        wb.Undo();
+        wb.Redo();
+        Assert.Equal(new[] { (true, true, false), (true, true, false), (true, true, true), (false, false, true), (true, true, true) }, seen);
+    }
+
+    [Fact]
+    public void CellsChanged_NamesStep_SeesFinalHistoryState()
+    {
+        var wb = Workbook.FromSnapshot([KV("A1", "1"), KV("B1", "=Rate")], [KV("Rate", "$A$1")]);
+        bool ok = false;
+        wb.CellsChanged += (_, _) => ok = wb.IsDirty && wb.CanUndo && !wb.CanRedo;
+        wb.ReplaceNames([]);
+        Assert.True(ok);
+    }
+
+    [Fact]
+    public void ThrowingSubscriber_StepStillRecordedAndUndoable()
+    {
+        var wb = new Workbook();
+        EventHandler<CellsChangedEventArgs> boom = (_, _) => throw new InvalidOperationException("boom");
+        wb.CellsChanged += boom;
+        Assert.Throws<InvalidOperationException>(() => wb.SetCell("A1", "1"));
+        Assert.Throws<InvalidOperationException>(() => wb.ApplyBatch([KV("B1", "2")]));
+        Assert.True(wb.CanUndo);
+        Assert.True(wb.IsDirty);
+        wb.CellsChanged -= boom;
+        Assert.True(wb.Undo());
+        Assert.Equal("", wb.GetInput("B1"));
+        Assert.True(wb.Undo());
+        Assert.Equal("", wb.GetInput("A1"));
+        Assert.False(wb.CanUndo);
+        Assert.False(wb.IsDirty);
+    }
+
+    [Fact]
     public void SameInput_NotDirty_NoEvent()
     {
         var wb = new Workbook();

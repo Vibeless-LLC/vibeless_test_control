@@ -285,9 +285,10 @@ public sealed class Workbook
         // The graph is fully updated before planning and is not touched while the plan is produced or evaluated.
         var plan = _planner.Plan(keys, changedNames, _isFormula);
         LastRecalc = new RecalcStats(Evaluate(plan, changed));
-        Raise(changed);
 
+        // History/dirty state is final before handlers run (they may read IsDirty/CanUndo, or throw).
         if (record) _history.Push(new EditStep(++_lastStepId, real.ToArray(), namesBefore, newNames));
+        Raise(changed);
     }
 
     private static bool SameNames(IReadOnlyList<KeyValuePair<string, string>> a, IReadOnlyList<KeyValuePair<string, string>> b)
