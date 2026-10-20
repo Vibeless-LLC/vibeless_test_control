@@ -9,6 +9,7 @@ public sealed class DocumentSession
 {
     private Workbook _workbook;
     private string? _filePath;
+    private bool _recovered; // restored from a recovery file: untitled and dirty until the next save
 
     public DocumentSession()
     {
@@ -26,12 +27,15 @@ public sealed class DocumentSession
     public string DocumentName => _filePath is null ? "Untitled" : Path.GetFileName(_filePath);
 
     /// <summary>True when the workbook has unsaved changes.</summary>
-    public bool IsDirty => _workbook.IsDirty;
+    public bool IsDirty => _workbook.IsDirty || _recovered;
 
     public string Title => "Gridline - " + DocumentName + (IsDirty ? " *" : "");
 
     /// <summary>Raised on any dirty, title or workbook change.</summary>
     public event EventHandler? StateChanged;
+
+    /// <summary>Raised after a successful Save or Save As.</summary>
+    public event EventHandler? Saved;
 
     public void New() => Replace(new Workbook(), null);
 
@@ -47,6 +51,13 @@ public sealed class DocumentSession
 
     /// <summary>Like <see cref="Open"/> but reports expected failures as a message; the session is unchanged on failure.</summary>
     public bool TryOpen(string path, out string? error) => Try(() => Open(path), out error);
+
+    /// <summary>
+    /// Loads a recovery file as an untitled document that counts as dirty until it is saved (§11.6). The session is
+    /// unchanged on failure.
+    /// </summary>
+    public bool TryOpenRecovered(string path, out string? error) =>
+        Try(() => Replace(GridlineFile.LoadFromPath(path), null, recovered: true), out error);
 
     public bool TrySave(out string? error) => Try(Save, out error);
 
@@ -68,15 +79,18 @@ public sealed class DocumentSession
         GridlineFile.SaveToPath(_workbook, path);
         _workbook.MarkSaved();
         _filePath = path;
+        _recovered = false;
         StateChanged?.Invoke(this, EventArgs.Empty);
+        Saved?.Invoke(this, EventArgs.Empty);
     }
 
-    private void Replace(Workbook wb, string? path)
+    private void Replace(Workbook wb, string? path, bool recovered = false)
     {
         _workbook.CellsChanged -= OnCellsChanged;
         _workbook = wb;
         _workbook.CellsChanged += OnCellsChanged;
         _filePath = path;
+        _recovered = recovered;
         StateChanged?.Invoke(this, EventArgs.Empty);
     }
 

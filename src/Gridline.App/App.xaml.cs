@@ -17,6 +17,8 @@ public partial class App : Application
                     MessageBoxButton.OK, MessageBoxImage.Error);
             }
         }
-        new MainWindow(session).Show();
+        var window = new MainWindow(session, new RecoveryService(RecoveryService.ResolveDir(), session.SessionId));
+        window.Show();
+        window.Dispatcher.BeginInvoke(window.OfferRecovery, System.Windows.Threading.DispatcherPriority.ApplicationIdle);
     }
 }

@@ -1,0 +1,14 @@
+<Window x:Class="Gridline.App.RecoveryDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        AutomationProperties.AutomationId="RecoveryDialog"
+        Title="Gridline - Recover documents" Width="520" SizeToContent="Height" MaxHeight="500"
+        WindowStartupLocation="CenterOwner" ShowInTaskbar="False" ResizeMode="NoResize">
+    <StackPanel Margin="16">
+        <TextBlock x:Name="Heading" TextWrapping="Wrap" Margin="0,0,0,12"
+                   Text="Gridline found unsaved documents from an earlier session. Restore or discard each one." />
+        <StackPanel x:Name="FileList" />
+        <Button x:Name="CloseButton" Content="Close" HorizontalAlignment="Right" MinWidth="80" Margin="0,12,0,0"
+                IsCancel="True" AutomationProperties.AutomationId="CloseButton" Click="OnClose" />
+    </StackPanel>
+</Window>

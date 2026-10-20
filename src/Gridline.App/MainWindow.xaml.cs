@@ -14,11 +14,17 @@ public partial class MainWindow : Window
     private readonly SheetController _controller;
     private readonly DocumentLifecycle _lifecycle;
 
+    private readonly RecoveryService? _recovery;
+    private readonly System.Windows.Threading.DispatcherTimer? _autosaveTimer;
+
     public MainWindow() : this(new DocumentSession()) { }
 
-    public MainWindow(DocumentSession session)
+    /// <param name="recovery">Autosave/recovery service, or null to disable autosave.</param>
+    /// <param name="autosaveInterval">Autosave period; 60 s when null (§11.6). Injectable for tests.</param>
+    public MainWindow(DocumentSession session, RecoveryService? recovery = null, TimeSpan? autosaveInterval = null)
     {
         _session = session;
+        _recovery = recovery;
         InitializeComponent();
         _lifecycle = new DocumentLifecycle(_session, new WindowPrompt(this), PickSavePath, PickOpenPath, ShowError);
         Closing += OnWindowClosing;
@@ -30,6 +36,14 @@ public partial class MainWindow : Window
         Sheet.Workbook = _session.Workbook;
         Title = _session.Title;
         _session.StateChanged += (_, _) => OnSessionStateChanged();
+        if (_recovery is not null)
+        {
+            _session.Saved += (_, _) => _recovery.Delete();
+            _autosaveTimer = new System.Windows.Threading.DispatcherTimer { Interval = autosaveInterval ?? TimeSpan.FromSeconds(60) };
+            _autosaveTimer.Tick += (_, _) => Autosave();
+            _autosaveTimer.Start();
+            Closed += (_, _) => { _autosaveTimer.Stop(); _recovery.Delete(); }; // Closed only follows a non-cancelled close
+        }
 
         Sheet.ViewportChanged += (_, _) => OnViewportChanged();
         Sheet.Selection.Changed += (_, _) => RefreshBars();
@@ -41,9 +55,36 @@ public partial class MainWindow : Window
         RefreshBars();
     }
 
+    private void Autosave()
+    {
+        try { _recovery?.AutosaveIfDirty(_session); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { } // retry on the next tick
+    }
+
+    /// <summary>Offers each recovery file left by an earlier session (§11.6); call once the window is shown.</summary>
+    public void OfferRecovery()
+    {
+        if (_recovery is null) return;
+        var files = _recovery.FindRecoveryFiles();
+        if (files.Count == 0) return;
+        var dlg = new RecoveryDialog(files, Restore, RecoveryService.DeleteFile) { Owner = this };
+        dlg.ShowDialog();
+        Sheet.Focus();
+    }
+
+    private string? Restore(string path)
+    {
+        EndEdit(commit: true);
+        if (!_lifecycle.ConfirmDiscard()) return "Restore cancelled.";
+        if (!_session.TryOpenRecovered(path, out var error)) return error;
+        RecoveryService.DeleteFile(path);
+        return null;
+    }
+
     private void OnSessionStateChanged()
     {
         Title = _session.Title;
+        if (!_session.IsDirty) _recovery?.Delete(); // undone/new/opened back to clean: nothing left to recover
         if (!ReferenceEquals(Sheet.Workbook, _session.Workbook))
         {
             _controller.Workbook = _session.Workbook; // cancels any in-cell edit
