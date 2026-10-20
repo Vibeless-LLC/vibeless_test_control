@@ -23,8 +23,9 @@ internal static class DateSerial
         long months = y * 12 + (m - 1);
         long y2 = Math.DivRem(months, 12, out long rem);
         if (rem < 0) { rem += 12; y2--; }
-        if (y2 < 1900 || y2 > 9999) return false;
-        long s = FirstOfMonth((int)y2, (int)rem + 1) + d - 1;
+        // The year may be out of range here (10000-xx with a negative day offset); only the final serial is checked.
+        if (y2 < 1900 || y2 > 10000) return false;
+        long s = FirstOfMonthLong(y2, (int)rem + 1) + d - 1;
         if (s < 0 || s > Max) return false;
         serial = (int)s;
         return true;
@@ -36,6 +37,15 @@ internal static class DateSerial
         if (y == 1900 && m == 1) return 1;
         if (y == 1900 && m == 2) return 32;
         return new DateOnly(y, m, 1).DayNumber - Epoch;
+    }
+
+    /// <summary>First-of-month serial for years 1900..10000 (10000 is a leap year; DateOnly stops at 9999).</summary>
+    private static long FirstOfMonthLong(long y, int m)
+    {
+        if (y <= 9999) return FirstOfMonth((int)y, m);
+        long s = (long)Max + 1; // 10000-01-01
+        for (int i = 1; i < m; i++) s += DateTime.DaysInMonth(2000, i); // 2000 is leap like 10000
+        return s;
     }
 
     /// <summary>Days in the month, treating 1900-02 as having 29 days (the fictitious leap day).</summary>

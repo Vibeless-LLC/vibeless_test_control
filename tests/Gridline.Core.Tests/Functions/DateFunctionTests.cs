@@ -5,6 +5,15 @@ namespace Gridline.Core.Tests.Functions;
 /// <summary>Date functions with the Excel 1900 serial system (§7.6).</summary>
 public class DateFunctionTests
 {
+    [Fact]
+    public void Date_DayOffsetAppliedBeforeYearRangeCheck()
+    {
+        int expected = (new DateTime(9999, 12, 26) - new DateTime(1899, 12, 30)).Days;
+        Assert.Equal("N:" + expected, CoreTestHost.Eval("=DATE(9999,13,-5)"));
+        Assert.Equal("E:#NUM!", CoreTestHost.Eval("=DATE(9999,13,1)"));
+        Assert.Equal("N:0", CoreTestHost.Eval("=DATE(1900,1,0)"));
+    }
+
     [Theory]
     [InlineData("DATE(1900,1,1)", "N:1")] [InlineData("DATE(1900,2,28)", "N:59")] [InlineData("DATE(1900,2,29)", "N:60")] [InlineData("DATE(1900,3,1)", "N:61")] [InlineData("DATE(1900,1,0)", "N:0")]
     [InlineData("DATE(2024,14,1)", "N:45689")] [InlineData("DATE(2024,1,0)", "N:45291")] [InlineData("DATE(24,1,1)", "N:8767")] [InlineData("DATE(-1,1,1)", "E:#NUM!")] [InlineData("DATE(10000,1,1)", "E:#NUM!")] [InlineData("DATE(9999,12,31)", "N:2958465")] [InlineData("DATE(9999,12,32)", "E:#NUM!")] [InlineData("DATE(1900,1,-1)", "E:#NUM!")]

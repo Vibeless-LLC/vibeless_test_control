@@ -84,6 +84,25 @@ public sealed class DocumentSession
         }
     }
 
+    /// <summary>
+    /// Runs a structural edit (insert/delete rows or columns). StateChanged is raised afterwards even when no cell
+    /// changed (a names-only edit still pushes an undo step and dirties the workbook, so the title must refresh).
+    /// </summary>
+    public void ApplyStructural(Action<Workbook> edit)
+    {
+        try { edit(_workbook); }
+        finally { StateChanged?.Invoke(this, EventArgs.Empty); }
+    }
+
+    public void InsertRows(int first, int count) => ApplyStructural(w => w.InsertRows(first, count));
+    public void DeleteRows(int first, int count) => ApplyStructural(w => w.DeleteRows(first, count));
+    public void InsertColumns(int first, int count) => ApplyStructural(w => w.InsertColumns(first, count));
+    public void DeleteColumns(int first, int count) => ApplyStructural(w => w.DeleteColumns(first, count));
+
+    /// <summary>Undo/Redo that also refreshes state (an undone names-only step raises no CellsChanged).</summary>
+    public void Undo() => ApplyStructural(w => w.Undo());
+    public void Redo() => ApplyStructural(w => w.Redo());
+
     private void SaveTo(string path)
     {
         GridlineFile.SaveToPath(_workbook, path);

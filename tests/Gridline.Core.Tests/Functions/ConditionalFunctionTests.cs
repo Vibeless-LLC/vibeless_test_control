@@ -17,7 +17,7 @@ public class ConditionalFunctionTests
     // additional edges
     [InlineData("COUNTIF(A1:A6,\"5\")", "N:0")] [InlineData("COUNTIF(A1:A6,\"=5\")", "N:0")] [InlineData("COUNTIF(A1:A6,\"<>5\")", "N:1")]
     [InlineData("COUNTIF(A1:A6,\"=x\")", "N:1")] [InlineData("COUNTIF(A1:A6,\"<=x\")", "N:2")] [InlineData("COUNTIF(A1:A6,\">x\")", "N:1")] [InlineData("COUNTIF(A1:A6,\"?\")", "N:2")]
-    [InlineData("COUNTIF(A1:A6,TRUE)", "N:0")] [InlineData("COUNTIF(A1:A6,A4)", "N:1")] [InlineData("COUNTIF(A1:A6,\"<>x\")", "N:4")] [InlineData("COUNTIF(A1:A6,\"<>\"&\"\")", "N:4")]
+    [InlineData("COUNTIF(A1:A6,TRUE)", "N:0")] [InlineData("COUNTIF(A1:A6,A4)", "N:0")] [InlineData("COUNTIF(A1:A6,\"<>x\")", "N:4")] [InlineData("COUNTIF(A1:A6,\"<>\"&\"\")", "N:4")]
     [InlineData("COUNTIF(B1:B6,\"<=30\")", "N:3")] [InlineData("COUNTIF(B1:B6,30)", "N:1")] [InlineData("COUNTIF(B1:B6,\"=30\")", "N:1")] [InlineData("COUNTIF(B1:B6,\"<>30\")", "N:5")]
     [InlineData("COUNTIF(5,1)", "E:#VALUE!")] [InlineData("COUNTIF(A1:A6,)", "E:#VALUE!")]
     [InlineData("SUMIF(A1:A6,\"\",B1:B6)", "N:40")] [InlineData("SUMIF(A1:A6,\"x\",B1:B6)", "N:30")] [InlineData("SUMIF(A1:A6,\"=\",B3:B6)", "N:60")]
@@ -25,6 +25,19 @@ public class ConditionalFunctionTests
     [InlineData("SUMIF(A1:A6,\"XY\",B100000)", "N:0")] [InlineData("SUMIF(A1:A6,1,5)", "E:#VALUE!")] [InlineData("SUMIF(5,1)", "E:#VALUE!")]
     [InlineData("AVERAGEIF(A1:A6,\"<>x\",B1:B6)", "N:32.5")] [InlineData("AVERAGEIF(B1:B6,\"<>\")", "N:35")]
     public void Conditional(string f, string e) => Assert.Equal(e, CoreTestHost.Eval("=" + f, Fixture));
+
+    private static readonly (string, string)[] ZeroFixture =
+    [
+        ("A1", "0"), ("A3", "5"), ("B1", "10"), ("B2", "20"), ("B3", "30"),
+    ];
+
+    [Fact]
+    public void BlankCriteriaValue_IsNumericZero()
+    {
+        Assert.Equal("N:1", CoreTestHost.Eval("=COUNTIF(A1:A3,C1)", ZeroFixture));
+        Assert.Equal("N:10", CoreTestHost.Eval("=SUMIF(A1:A3,C1,B1:B3)", ZeroFixture));
+        Assert.Equal("N:1", CoreTestHost.Eval("=COUNTIF(A1:A3,\"\")", ZeroFixture));
+    }
 
     [Fact]
     public void Criteria_NotEqualText_IncludesBlanksExcludesErrors() =>

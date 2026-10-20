@@ -390,7 +390,7 @@ public sealed class Workbook
         ArgumentNullException.ThrowIfNull(name);
         ArgumentNullException.ThrowIfNull(refersTo);
         if (refersTo == ErrorCodes.Ref) throw new ArgumentException("refersTo cannot be #REF!", nameof(refersTo));
-        var d = ParseName(name, refersTo, nameof(name));
+        var d = ParseName(name, refersTo, nameof(name), nameof(refersTo));
         var list = new List<KeyValuePair<string, string>>(_names.Count + 1);
         foreach (var e in _names.Values)
             if (!e.Name.Equals(d.Name, StringComparison.OrdinalIgnoreCase)) list.Add(new(e.Name, e.RefersTo));
@@ -459,12 +459,12 @@ public sealed class Workbook
     }
 
     /// <summary>Validates one name and its <c>refersTo</c> (§9.6) and returns its canonical definition.</summary>
-    private static NameDef ParseName(string name, string refersTo, string paramName)
+    private static NameDef ParseName(string name, string refersTo, string paramName, string? refersToParamName = null)
     {
         if (!NameRules.IsValidName(name)) throw new ArgumentException($"Invalid name: '{name}'", paramName);
         if (refersTo == ErrorCodes.Ref) return new NameDef(name, ErrorCodes.Ref, null, false);
         if (!NameRules.TryParseRefersTo(refersTo, out var target))
-            throw new ArgumentException($"Invalid refersTo for name '{name}': '{refersTo}'", paramName);
+            throw new ArgumentException($"Invalid refersTo for name '{name}': '{refersTo}'", refersToParamName ?? paramName);
         bool isRange = refersTo.Contains(':');
         return new NameDef(name, NameRules.FormatRefersTo(target, isRange), target, isRange);
     }

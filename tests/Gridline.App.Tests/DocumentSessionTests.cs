@@ -20,6 +20,31 @@ public class DocumentSessionTests : IDisposable
     }
 
     [Fact]
+    public void NamesOnlyStructuralEdit_RaisesStateChangedAndTitleGainsStar()
+    {
+        var s = new DocumentSession();
+        s.Workbook.DefineName("Rate", "$B$10");
+        s.Workbook.SetCell("A1", "=Rate");
+        s.SaveAs(Path.Combine(_dir, "n.gridline"));
+        Assert.Equal("Gridline - n.gridline", s.Title);
+        int raised = 0;
+        s.StateChanged += (_, _) => raised++;
+        s.InsertRows(5, 1);
+        Assert.True(raised > 0);
+        Assert.Equal("Gridline - n.gridline *", s.Title);
+        s.SaveAs(Path.Combine(_dir, "n.gridline"));
+        raised = 0;
+        s.Undo();
+        Assert.True(raised > 0);
+        Assert.EndsWith(" *", s.Title);
+        s.SaveAs(Path.Combine(_dir, "n.gridline"));
+        raised = 0;
+        s.Redo();
+        Assert.True(raised > 0);
+        Assert.EndsWith(" *", s.Title);
+    }
+
+    [Fact]
     public void SaveAs_SetsNameAndClean()
     {
         var s = new DocumentSession();

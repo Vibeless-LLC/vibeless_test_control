@@ -151,6 +151,14 @@ public class NamesTests
     public void InvalidNames(string n) => Assert.False(NameRules.IsValidName(n));
 
     [Fact]
+    public void DefineName_InvalidRefersTo_ParamNameIsRefersTo()
+    {
+        var wb = new Workbook();
+        Assert.Equal("refersTo", Assert.Throws<ArgumentException>(() => wb.DefineName("R", "B1")).ParamName);
+        Assert.Equal("name", Assert.Throws<ArgumentException>(() => wb.DefineName("A1", "$A$1")).ParamName);
+    }
+
+    [Fact]
     public void RefersTo_MustBeAbsolute()
     {
         var wb = new Workbook();

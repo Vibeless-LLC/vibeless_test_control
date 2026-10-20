@@ -26,8 +26,7 @@ internal sealed class Criteria
     }
 
     /// <summary>
-    /// Builds the criterion for a criteria value. A number or boolean means equality, a Blank value is the empty
-    /// criterion, text is parsed as an optional operator and an operand. The caller handles an Error value.
+    /// Builds the criterion for a criteria value. A number or boolean means equality, a Blank value is equals 0, text is parsed as an optional operator and an operand. The caller handles an Error value.
     /// </summary>
     public static Criteria FromValue(CellValue c)
     {
@@ -36,7 +35,7 @@ internal sealed class Criteria
             case ValueKind.Number: return new Criteria(Shape.Number, Op.Eq, number: c.Number);
             case ValueKind.Boolean: return new Criteria(Shape.Boolean, Op.Eq, b: c.Boolean);
             case ValueKind.Text: return Parse(c.Text);
-            default: return new Criteria(Shape.Empty, Op.Eq);
+            default: return new Criteria(Shape.Number, Op.Eq, number: 0); // a Blank criteria value is 0 (§7.5)
         }
     }
 

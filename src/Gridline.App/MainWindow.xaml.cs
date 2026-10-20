@@ -342,15 +342,14 @@ public partial class MainWindow : Window
 
     private void ApplyStructural(HeaderKind kind, int first, int count, bool insert)
     {
-        var wb = _session.Workbook;
         try
         {
             if (kind == HeaderKind.Row)
             {
-                if (insert) wb.InsertRows(first, count); else wb.DeleteRows(first, count);
+                if (insert) _session.InsertRows(first, count); else _session.DeleteRows(first, count);
             }
-            else if (insert) wb.InsertColumns(first, count);
-            else wb.DeleteColumns(first, count);
+            else if (insert) _session.InsertColumns(first, count);
+            else _session.DeleteColumns(first, count);
         }
         catch (Exception ex) when (ex is InvalidOperationException or ArgumentOutOfRangeException)
         {
@@ -379,8 +378,8 @@ public partial class MainWindow : Window
     private void UndoRedo(bool undo)
     {
         EndEdit(commit: false);
-        if (undo) _session.Workbook.Undo();
-        else _session.Workbook.Redo();
+        if (undo) _session.Undo();
+        else _session.Redo();
     }
 
     private void CanUndo(object s, CanExecuteRoutedEventArgs e) => e.CanExecute = _session.Workbook.CanUndo;
