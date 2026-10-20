@@ -42,22 +42,36 @@ internal static class LookupFunctions
         _ => false, // Blank and Error never match
     };
 
-    /// <summary>Index of the last element in [0, n) for which <paramref name="holds"/> is true, assuming it is true then false; -1 if none.</summary>
-    private static int LastWhere(int n, Func<int, bool> holds)
+    /// <summary>
+    /// Approximate search (§7.4, Excel parity): binary search considering only keys of the same kind as
+    /// <paramref name="v"/> (a Blank lookup value counts as 0). When the probe is not a same-kind key, the nearest
+    /// same-kind key inside the current window is used instead; with none the search ends. Returns the last index with
+    /// key ≤ v (<paramref name="le"/>) or key ≥ v, or -1.
+    /// </summary>
+    private static int LastSameKind(int n, Func<int, CellValue> key, CellValue v, bool le)
     {
+        if (v.Kind == ValueKind.Blank) v = CellValue.FromNumber(0);
         int lo = 0, hi = n - 1, best = -1;
         while (lo <= hi)
         {
             int mid = lo + ((hi - lo) >> 1);
-            if (holds(mid)) { best = mid; lo = mid + 1; } else hi = mid - 1;
+            CellValue k = key(mid);
+            int p = mid;
+            if (k.Kind != v.Kind)
+            {
+                p = -1;
+                for (int d = 1; mid - d >= lo || mid + d <= hi; d++)
+                {
+                    if (mid - d >= lo && (k = key(mid - d)).Kind == v.Kind) { p = mid - d; break; }
+                    if (mid + d <= hi && (k = key(mid + d)).Kind == v.Kind) { p = mid + d; break; }
+                }
+                if (p < 0) break;
+            }
+            int cmp = Comparison.Compare(k, v);
+            if (le ? cmp <= 0 : cmp >= 0) { best = p; lo = p + 1; } else hi = p - 1;
         }
         return best;
     }
-
-    /// <summary>Key ≤ v under §6.3; an error key never qualifies.</summary>
-    private static bool KeyLe(CellValue key, CellValue v) => key.Kind != ValueKind.Error && Comparison.Compare(key, v) <= 0;
-
-    private static bool KeyGe(CellValue key, CellValue v) => key.Kind != ValueKind.Error && Comparison.Compare(key, v) >= 0;
 
     private static CellValue Lookup(IReadOnlyList<Arg> a, bool vertical)
     {
@@ -79,7 +93,7 @@ internal static class LookupFunctions
         int n = vertical ? table.Rows : table.Cols;
         CellValue Key(int i) => vertical ? table.Get(i, 0) : table.Get(0, i);
         int hit = -1;
-        if (approx) hit = LastWhere(n, i => KeyLe(Key(i), v));
+        if (approx) hit = LastSameKind(n, Key, v, le: true);
         else
             for (int i = 0; i < n; i++)
                 if (ExactEqual(v, Key(i))) { hit = i; break; }
@@ -94,7 +108,7 @@ internal static class LookupFunctions
         bool hasC = a.Count > 2 && !a[2].IsOmitted;
         int c = 0;
         if (hasC && !Coercion.TryToInt(a[2].Evaluate(), out c, out var cerr)) return cerr;
-        if (r == 0 || (hasC && c == 0)) return Err(ErrorCodes.Value);
+        if (r <= 0 || (hasC && c <= 0)) return Err(ErrorCodes.Value);
         if (!hasC)
         {
             if (range.Rows == 1) { c = r; r = 1; }
@@ -122,8 +136,8 @@ internal static class LookupFunctions
             for (int i = 0; i < n; i++)
                 if (ExactEqual(v, At(i))) { hit = i; break; }
         }
-        else if (type > 0) hit = LastWhere(n, i => KeyLe(At(i), v));
-        else hit = LastWhere(n, i => KeyGe(At(i), v));
+        else if (type > 0) hit = LastSameKind(n, At, v, le: true);
+        else hit = LastSameKind(n, At, v, le: false);
         return hit < 0 ? Err(ErrorCodes.NA) : CellValue.FromNumber(hit + 1);
     }
 

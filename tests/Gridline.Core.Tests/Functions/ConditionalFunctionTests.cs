@@ -74,4 +74,14 @@ public class ConditionalFunctionTests
         Assert.Equal("N:0", wb.GetValue("D3").ToCanonicalString());
 
     }
+
+    [Fact]
+    public void NotEqualBoolean_MatchesEverythingButThatBoolean()
+    {
+        var f = new (string, string)[] { ("A1", "1"), ("A2", "x"), ("B1", "FALSE") };
+        Assert.Equal("N:8", CoreTestHost.Eval("=COUNTIF(A1:B4,\"<>TRUE\")", f));
+        Assert.Equal("N:7", CoreTestHost.Eval("=COUNTIF(A1:B4,\"<>FALSE\")", f));
+        var g = new (string, string)[] { ("A1", "TRUE"), ("A2", "=1/0") };
+        Assert.Equal("N:2", CoreTestHost.Eval("=COUNTIF(A1:B2,\"<>TRUE\")", g)); // B1, B2 blank; A1 TRUE and A2 error excluded
+    }
 }

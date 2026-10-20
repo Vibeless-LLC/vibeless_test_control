@@ -23,7 +23,7 @@ public class LookupFunctionTests
     [InlineData("VLOOKUP(1/0,A1:B4,2)", "E:#DIV/0!")] [InlineData("VLOOKUP(5,7,1)", "E:#VALUE!")] [InlineData("VLOOKUP(5,A1:B4,)", "E:#VALUE!")]
     [InlineData("VLOOKUP(TRUE,A1:B4,1,FALSE)", "E:#N/A")] [InlineData("VLOOKUP(\"a\",A1:B4,1,FALSE)", "E:#N/A")] [InlineData("VLOOKUP(5,A1:B4,2.9,0)", "T:c")]
     [InlineData("HLOOKUP(\"z\",D2:G2,1,FALSE)", "T:z")] [InlineData("HLOOKUP(4,D1:G2,3)", "E:#REF!")] [InlineData("HLOOKUP(0,D1:G2,2)", "E:#N/A")]
-    [InlineData("INDEX(A1:B4,1,3)", "E:#REF!")] [InlineData("INDEX(A1:B4,-1,1)", "E:#REF!")] [InlineData("INDEX(5,1)", "E:#VALUE!")] [InlineData("INDEX(A1,1)", "N:1")]
+    [InlineData("INDEX(A1:B4,1,3)", "E:#REF!")] [InlineData("INDEX(A1:B4,-1,1)", "E:#VALUE!")] [InlineData("INDEX(5,1)", "E:#VALUE!")] [InlineData("INDEX(A1,1)", "N:1")]
     [InlineData("INDEX(D1:G1,1,2)", "N:3")] [InlineData("INDEX(A1:A4,1,0)", "E:#VALUE!")]
     [InlineData("MATCH(7,A1:A4,1)", "N:4")] [InlineData("MATCH(9,H1:H3,-1)", "N:1")] [InlineData("MATCH(10,H1:H3,-1)", "E:#N/A")] [InlineData("MATCH(3,D1:G1,0)", "N:2")] [InlineData("MATCH(\"X\",D2:G2,0)", "N:1")]
     [InlineData("MATCH(1/0,A1:A4)", "E:#DIV/0!")] [InlineData("MATCH(1,5,0)", "E:#VALUE!")] [InlineData("MATCH(TRUE,A1:A4,0)", "E:#N/A")]
@@ -69,5 +69,48 @@ public class LookupFunctionTests
         wb.SetCell("C2", "=VLOOKUP(99999,A1:A100000,1)");
         Assert.Equal("N:75000", wb.GetValue("C1").ToCanonicalString());
         Assert.Equal("N:99998", wb.GetValue("C2").ToCanonicalString());
+    }
+
+    private static readonly (string, string)[] Padded =
+    [
+        ("A1", "1"), ("A2", "3"), ("A3", "5"), ("A4", "7"), ("B1", "a"), ("B2", "b"), ("B3", "c"), ("B4", "d"),
+    ];
+
+    [Theory]
+    [InlineData("VLOOKUP(4,A1:B10,2)", "T:b")] [InlineData("MATCH(1E+307,A1:A10)", "N:4")] [InlineData("VLOOKUP(\"x\",A1:B4,2)", "E:#N/A")]
+    [InlineData("MATCH(TRUE,A1:A4)", "E:#N/A")] [InlineData("MATCH(\"x\",A1:A10)", "E:#N/A")] [InlineData("MATCH(0,A1:A10)", "E:#N/A")]
+    public void Approximate_SkipsOtherKindsAndBlanks(string f, string e) => Assert.Equal(e, CoreTestHost.Eval("=" + f, Padded));
+
+    [Fact]
+    public void Approximate_MixedKindsSortedPerKind()
+    {
+        var f = new (string, string)[] { ("A1", "1"), ("A2", "5"), ("A3", "9"), ("A4", "apple"), ("A5", "pear"), ("A6", "zebra"), ("A7", "FALSE"), ("A8", "TRUE") };
+        Assert.Equal("N:2", CoreTestHost.Eval("=MATCH(6,A1:A8)", f));
+        Assert.Equal("N:3", CoreTestHost.Eval("=MATCH(100,A1:A8)", f));
+        Assert.Equal("N:5", CoreTestHost.Eval("=MATCH(\"q\",A1:A8)", f));
+        Assert.Equal("N:6", CoreTestHost.Eval("=MATCH(\"zzz\",A1:A8)", f));
+        Assert.Equal("E:#N/A", CoreTestHost.Eval("=MATCH(\"a\",A1:A8)", f));
+        Assert.Equal("N:7", CoreTestHost.Eval("=MATCH(FALSE,A1:A8)", f));
+        Assert.Equal("N:8", CoreTestHost.Eval("=MATCH(TRUE,A1:A8)", f));
+    }
+
+    [Fact]
+    public void Approximate_DescendingWithTrailingBlanks()
+    {
+        var f = new (string, string)[] { ("A1", "9"), ("A2", "5"), ("A3", "1") };
+        Assert.Equal("N:2", CoreTestHost.Eval("=MATCH(4,A1:A10,-1)", f));
+        Assert.Equal("N:3", CoreTestHost.Eval("=MATCH(1,A1:A10,-1)", f));
+        Assert.Equal("E:#N/A", CoreTestHost.Eval("=MATCH(10,A1:A10,-1)", f));
+    }
+
+    [Fact]
+    public void Approximate_100kRowsWithBlankTail()
+    {
+        var wb = new Workbook();
+        var edits = new List<KeyValuePair<string, string>>();
+        for (int r = 1; r <= 50_000; r++) edits.Add(KeyValuePair.Create("A" + r, (r * 2).ToString()));
+        wb.ApplyBatch(edits);
+        wb.SetCell("C1", "=MATCH(70001,A1:A100000)");
+        Assert.Equal("N:35000", wb.GetValue("C1").ToCanonicalString());
     }
 }

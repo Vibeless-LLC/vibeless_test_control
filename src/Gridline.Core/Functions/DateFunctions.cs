@@ -26,9 +26,12 @@ internal static class DateFunctions
     private static bool TrySerial(Arg a, out int serial, out CellValue error)
     {
         serial = 0;
-        if (!Coercion.TryToInt(ArgGuard.Required(a), out int s, out error)) return false;
-        if (s < 0 || s > DateSerial.Max) { error = Num(); return false; }
-        serial = s;
+        var n = Coercion.ToNumber(ArgGuard.Required(a));
+        if (n.Kind == ValueKind.Error) { error = n; return false; }
+        // Range-check before truncation: -0.5 is out of range, not 0.
+        if (n.Number < 0 || Math.Truncate(n.Number) > DateSerial.Max) { error = Num(); return false; }
+        error = default;
+        serial = (int)Math.Truncate(n.Number);
         return true;
     }
 

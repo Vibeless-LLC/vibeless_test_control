@@ -89,6 +89,7 @@ internal sealed class Criteria
             case Shape.Number:
                 return cell.Kind == ValueKind.Number && Test(cell.Number < _number ? -1 : cell.Number > _number ? 1 : 0);
             case Shape.Boolean:
+                if (_op == Op.Ne) return !(cell.Kind == ValueKind.Boolean && cell.Boolean == _bool);
                 return cell.Kind == ValueKind.Boolean && Test(cell.Boolean == _bool ? 0 : cell.Boolean ? 1 : -1);
             default:
                 if (_op == Op.Eq) return cell.Kind == ValueKind.Text && Wildcard.IsMatch(_text, cell.Text);

@@ -17,7 +17,7 @@ public class DateFunctionTests
     [InlineData("DATE(1900,0,1)", "E:#NUM!")] [InlineData("DATE(2024.9,1.9,1.9)", "N:45292")] [InlineData("DATE(\"a\",1,1)", "E:#VALUE!")] [InlineData("DATE(2024,1,)", "E:#VALUE!")] [InlineData("DATE(1/0,1,1)", "E:#DIV/0!")]
     [InlineData("DATE(2000,1,1)", "N:36526")] [InlineData("DATE(9999,13,1)", "E:#NUM!")]
     [InlineData("YEAR(1)", "N:1900")] [InlineData("MONTH(59)", "N:2")] [InlineData("DAY(59)", "N:28")] [InlineData("DAY(61)", "N:1")] [InlineData("YEAR(2958465)&\"-\"&MONTH(2958465)&\"-\"&DAY(2958465)", "T:9999-12-31")]
-    [InlineData("YEAR(\"x\")", "E:#VALUE!")] [InlineData("YEAR(0.9)", "N:1900")]
+    [InlineData("YEAR(\"x\")", "E:#VALUE!")] [InlineData("YEAR(-0.5)", "E:#NUM!")] [InlineData("WEEKDAY(-0.5)", "E:#NUM!")] [InlineData("EDATE(-0.5,1)", "E:#NUM!")] [InlineData("EOMONTH(-0.5,1)", "E:#NUM!")] [InlineData("DAY(-0.5)", "E:#NUM!")] [InlineData("MONTH(-0.5)", "E:#NUM!")] [InlineData("YEAR(0.9)", "N:1900")]
     [InlineData("WEEKDAY(45291)", "N:1")] [InlineData("WEEKDAY(45292,2)", "N:1")] [InlineData("WEEKDAY(45292,3)", "N:0")] [InlineData("WEEKDAY(45292,2.9)", "N:1")] [InlineData("WEEKDAY(-1)", "E:#NUM!")] [InlineData("WEEKDAY(7,1)", "N:7")]
     [InlineData("EDATE(DATE(2024,1,31),-2)", "N:45260")] [InlineData("EDATE(DATE(2023,1,31),1)", "N:44985")] [InlineData("EDATE(DATE(2024,3,15),0)", "N:45366")] [InlineData("EDATE(DATE(2024,3,15),12.9)", "N:45731")]
     [InlineData("EOMONTH(DATE(2024,1,31),0)", "N:45322")] [InlineData("EOMONTH(DATE(9999,12,1),0)", "N:2958465")] [InlineData("EOMONTH(DATE(9999,12,1),1)", "E:#NUM!")] [InlineData("EOMONTH(DATE(1900,3,1),-5)", "E:#NUM!")]
