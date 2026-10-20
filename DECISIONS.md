@@ -234,3 +234,7 @@ Non-trivial implementation choices, with spec section references.
 - **DATE day offset before range check (§7.6).** `DateSerial.TryFromYmd` allows the normalized year to be 10000 (a leap year) while adding the day offset and range-checks only the final serial, so `DATE(9999,13,-5)` is 9999-12-26 and `DATE(9999,13,1)` is `#NUM!`. Years before 1900 remain `#NUM!` as before.
 - **DefineName ParamName (§9.6).** An invalid `refersTo` throws `ArgumentException` with `ParamName == "refersTo"` (an invalid name still reports `"name"`).
 - **CSV 32,767-char field (§8.5).** A field of exactly 32,767 characters starting with `=` or `'` becomes 32,768 units after the `'` neutralizing prefix, exceeding the input limit, so the import fails with `GridlineFormatException` (exit 3). Intentional: no truncation.
+
+## CR-1 Task 1 (sheet names and qualified addresses)
+- CR1.2: `SheetNames.TryParsePrefix` accepts any non-empty quoted text (validity per CR1.1 is the caller's job); an unquoted prefix is accepted only if it does not need quoting, so `A1!B2`, `TRUE!A1` and `My Sheet!A1` are not prefixes. `QualifiedAddress.TryParse` then fails on them because the remaining text is not an address.
+- CR1.2: `QualifiedAddress.IsRange` is true iff a ':' appears after the prefix (so `B2:B2` is a range of one cell). `TryParseColumnOrRow` takes columns A..ZZ and rows 1..int.MaxValue (no grid-bound check; callers validate).
