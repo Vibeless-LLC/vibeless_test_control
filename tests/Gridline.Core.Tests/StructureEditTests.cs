@@ -256,6 +256,19 @@ public class StructureEditTests
         Assert.Equal("N:10000", wb.GetValue("C2").ToCanonicalString());
     }
 
+    [Fact]
+    public void DeleteRows_BulkMergePath_SumOverRange()
+    {
+        var wb = new Workbook();
+        for (int r = 1; r <= 100; r++) wb.SetCell("A" + r, r.ToString());
+        wb.SetCell("B1", "=SUM(A1:A100)");
+        wb.DeleteRows(10, 20); // more than 16 writes in one column: the merge path; removes rows 10..29
+        Assert.Equal("N:4660", wb.GetValue("B1").ToCanonicalString()); // 5050 - (10+...+29)
+        Assert.Equal("N:30", wb.GetValue("A10").ToCanonicalString());
+        wb.SetCell("B2", "=SUM(A1:A80)");
+        Assert.Equal("N:4660", wb.GetValue("B2").ToCanonicalString());
+    }
+
     private static KeyValuePair<string, string> KV(string k, string v) => KeyValuePair.Create(k, v);
 }
 
