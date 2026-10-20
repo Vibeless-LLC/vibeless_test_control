@@ -204,6 +204,145 @@ public sealed class Workbook
         return result;
     }
 
+    /// <summary>
+    /// Inserts <paramref name="count"/> empty rows before <paramref name="row"/> (§9.5): cells at rows ≥ row move
+    /// down and every reference in formulas and names is adjusted. One undo step. Requires
+    /// <c>1 ≤ row ≤ MaxRows</c> and <c>count ≥ 1</c> (<see cref="ArgumentOutOfRangeException"/>); throws
+    /// <see cref="InvalidOperationException"/> with no change if a cell with input would move past
+    /// <see cref="MaxRows"/> or a re-emitted formula would exceed <see cref="MaxInputLength"/>.
+    /// </summary>
+    public void InsertRows(int row, int count)
+    {
+        ValidateInsert(row, count, MaxRows, nameof(row));
+        ApplyStructural(new StructuralEdit(Axis.Row, row, count, IsInsert: true));
+    }
+
+    /// <summary>
+    /// Deletes rows <c>[row, row+count-1]</c> (§9.5): cells below move up and references are adjusted (references
+    /// into the deleted rows become <c>#REF!</c>). One undo step. Requires <c>1 ≤ row</c>, <c>count ≥ 1</c> and
+    /// <c>row + count - 1 ≤ MaxRows</c> (<see cref="ArgumentOutOfRangeException"/>); throws
+    /// <see cref="InvalidOperationException"/> with no change if a re-emitted formula would exceed
+    /// <see cref="MaxInputLength"/>.
+    /// </summary>
+    public void DeleteRows(int row, int count)
+    {
+        ValidateDelete(row, count, MaxRows, nameof(row));
+        ApplyStructural(new StructuralEdit(Axis.Row, row, count, IsInsert: false));
+    }
+
+    /// <summary>Inserts columns before 1-based <paramref name="column"/>; symmetric to <see cref="InsertRows"/> with <see cref="MaxColumns"/>.</summary>
+    public void InsertColumns(int column, int count)
+    {
+        ValidateInsert(column, count, MaxColumns, nameof(column));
+        ApplyStructural(new StructuralEdit(Axis.Column, column, count, IsInsert: true));
+    }
+
+    /// <summary>Deletes columns <c>[column, column+count-1]</c>; symmetric to <see cref="DeleteRows"/> with <see cref="MaxColumns"/>.</summary>
+    public void DeleteColumns(int column, int count)
+    {
+        ValidateDelete(column, count, MaxColumns, nameof(column));
+        ApplyStructural(new StructuralEdit(Axis.Column, column, count, IsInsert: false));
+    }
+
+    private static void ValidateInsert(int at, int count, int max, string atName)
+    {
+        if (at < 1 || at > max) throw new ArgumentOutOfRangeException(atName, at, $"Must be between 1 and {max}.");
+        if (count < 1) throw new ArgumentOutOfRangeException(nameof(count), count, "Must be at least 1.");
+    }
+
+    private static void ValidateDelete(int at, int count, int max, string atName)
+    {
+        if (at < 1 || at > max) throw new ArgumentOutOfRangeException(atName, at, $"Must be between 1 and {max}.");
+        if (count < 1 || (long)at + count - 1 > max)
+            throw new ArgumentOutOfRangeException(nameof(count), count, $"The span must lie within 1..{max}.");
+    }
+
+    /// <summary>
+    /// The insert/delete core (§9.5). Everything is computed and validated before anything changes: the new full
+    /// cell map (moved cells keep their input verbatim unless they are non-parse-error formulas with a changed
+    /// reference, which are re-emitted canonically per §5.5), its diff against the current map, and the adjusted
+    /// names (a target that no longer exists becomes <c>#REF!</c>). Then one <see cref="Commit"/>, one step.
+    /// </summary>
+    private void ApplyStructural(StructuralEdit e)
+    {
+        bool rows = e.Axis == Axis.Row;
+        int max = rows ? MaxRows : MaxColumns;
+        if (e.IsInsert && InsertWouldOverflow(e, max))
+            throw new InvalidOperationException($"Inserting would move cells with input past the last {(rows ? "row" : "column")}.");
+
+        var moved = new Dictionary<int, string>(_store.Count);
+        foreach (var (key, cell) in _store.All)
+        {
+            var a = CellAddress.FromKey(key);
+            if (!StructuralShift.TryShiftIndex(rows ? a.Row : a.Col, e, max, out int nx)) continue; // deleted
+            var na = rows ? new CellAddress(nx, a.Col) : new CellAddress(a.Row, nx);
+            string text = cell.Input;
+            if (cell.Kind == CellKind.Formula && cell.Formula is { IsParseError: false, Root: { } root })
+            {
+                var rewritten = ReferenceRewriter.Structural(root, e, out bool changed);
+                if (changed)
+                {
+                    text = FormulaPrinter.Print(rewritten, NameCasing);
+                    if (text.Length > MaxInputLength)
+                        throw new InvalidOperationException($"A rewritten formula would exceed {MaxInputLength} characters (cell {a}).");
+                }
+            }
+            moved.Add(na.Key, text);
+        }
+
+        var edits = new List<CellEdit>(moved.Count * 2);
+        foreach (var (key, cell) in _store.All)
+            if (!moved.ContainsKey(key)) edits.Add(new CellEdit(key, cell.Input, ""));
+        foreach (var (key, text) in moved)
+        {
+            string old = CurrentInput(key);
+            if (!string.Equals(old, text, StringComparison.Ordinal)) edits.Add(new CellEdit(key, old, text));
+        }
+        edits.Sort(static (x, y) => x.Key.CompareTo(y.Key)); // row-major, deterministic step contents
+
+        IReadOnlyList<KeyValuePair<string, string>>? names = null;
+        if (_names.Count > 0)
+        {
+            var current = GetNames();
+            var list = new KeyValuePair<string, string>[current.Count];
+            for (int i = 0; i < current.Count; i++)
+            {
+                var d = _names[current[i].Key];
+                list[i] = new(d.Name, ShiftRefersTo(d, e, max));
+            }
+            names = list;
+        }
+        Commit(edits, names, record: true);
+    }
+
+    /// <summary>A name's adjusted <c>refersTo</c> (§9.6): same form (cell or range), or <c>#REF!</c> when its target is gone.</summary>
+    private static string ShiftRefersTo(NameDef d, StructuralEdit e, int max)
+    {
+        if (d.Target is not { } t) return ErrorCodes.Ref;
+        int r0 = t.TopLeft.Row, r1 = t.BottomRight.Row, c0 = t.TopLeft.Col, c1 = t.BottomRight.Col;
+        bool ok = e.Axis == Axis.Row
+            ? StructuralShift.TryShiftSpan(r0, r1, e, max, out r0, out r1)
+            : StructuralShift.TryShiftSpan(c0, c1, e, max, out c0, out c1);
+        return ok ? NameRules.FormatRefersTo(new RangeAddress(new CellAddress(r0, c0), new CellAddress(r1, c1)), d.IsRange) : ErrorCodes.Ref;
+    }
+
+    /// <summary>True when an insert would push a cell with input past the last row/column (checked per column, O(columns)).</summary>
+    private bool InsertWouldOverflow(StructuralEdit e, int max)
+    {
+        if (e.Axis == Axis.Row)
+        {
+            for (int c = 1; c <= MaxColumns; c++)
+            {
+                int last = _store.LastRow(c);
+                if (last >= e.At && last + (long)e.Count > max) return true;
+            }
+            return false;
+        }
+        for (int c = max; c >= e.At && c + (long)e.Count > max; c--)
+            if (_store.LastRow(c) > 0) return true;
+        return false;
+    }
+
     private string? NameCasing(string upper) => _names.TryGetValue(upper, out var d) ? d.Name : null;
 
     /// <summary>True when there is a step to undo (§9.3).</summary>
@@ -367,12 +506,14 @@ public sealed class Workbook
 
         var changed = new List<int>(real.Count);
         var keys = new int[real.Count];
+        var writes = new (int Key, Cell? Cell)[real.Count];
         for (int i = 0; i < real.Count; i++)
         {
             keys[i] = real[i].Key;
-            Apply(real[i].Key, real[i].NewInput);
+            writes[i] = (real[i].Key, Prepare(real[i].Key, real[i].NewInput)); // keys are distinct: reads see the old store
             changed.Add(real[i].Key);
         }
+        _store.SetMany(writes);
         List<string> changedNames = newNames is null ? [] : InstallNames(newNames);
 
         // The graph is fully updated before planning and is not touched while the plan is produced or evaluated.
@@ -394,7 +535,7 @@ public sealed class Workbook
     }
 
     /// <summary>
-    /// Replaces all names with <paramref name="names"/> (validated) and returns the upper-cased names whose target
+    /// Replaces all names with <paramref name="names"/> (validated) and returns the upper-cased names whose target or form (cell/range)
     /// changed, appeared or disappeared, for the recalc plan. A removed name keeps its graph node (and dependents)
     /// with no target, so redefining it later reconnects its formulas.
     /// </summary>
@@ -407,7 +548,8 @@ public sealed class Workbook
         {
             var d = ParseName(name, refersTo, nameof(names));
             AddName(d);
-            if (!old.Remove(name, out var prev) || prev.Target != d.Target) changed.Add(name.ToUpperInvariant());
+            // A form change alone (1x1 range ↔ cell) changes evaluation too (=R is #VALUE! for a range).
+            if (!old.Remove(name, out var prev) || prev.Target != d.Target || prev.IsRange != d.IsRange) changed.Add(name.ToUpperInvariant());
         }
         foreach (var gone in old.Keys)
         {
@@ -423,6 +565,18 @@ public sealed class Workbook
     /// <summary>Interprets and stores one input, updating the dependency graph.</summary>
     private void Apply(int key, string input)
     {
+        var cell = Prepare(key, input);
+        if (cell is null) _store.Remove(key);
+        else _store.Set(key, cell);
+    }
+
+    /// <summary>
+    /// Interprets one input and updates the dependency graph for <paramref name="key"/>; the caller stores the
+    /// returned cell (null = blank). A formula starts from the key's previous value so recalc can tell whether it
+    /// changed.
+    /// </summary>
+    private Cell? Prepare(int key, string input)
+    {
         bool hadCell = _store.TryGet(key, out var old);
         var cell = InputInterpreter.Interpret(input, _arity);
 
@@ -434,9 +588,7 @@ public sealed class Workbook
         }
         else if (hadCell && old.Kind == CellKind.Formula)
             _graph.SetDependencies(key, null);
-
-        if (cell is null) _store.Remove(key);
-        else _store.Set(key, cell);
+        return cell;
     }
 
     /// <summary>
@@ -456,8 +608,9 @@ public sealed class Workbook
             if (anyCycles && cycles.Contains(key)) v = Circ;
             else
             {
-                _ctx.FormulaRow = key / 1024;
-                _ctx.FormulaCol = key % 1024;
+                var at = CellAddress.FromKey(key);
+                _ctx.FormulaRow = at.Row;
+                _ctx.FormulaCol = at.Col;
                 v = _evaluator.Evaluate(cell.Formula!, _ctx);
             }
             if (!v.Equals(cell.Value))
@@ -499,7 +652,7 @@ public sealed class Workbook
         public int FormulaCol { get; set; }
 
         public CellValue GetCellValue(int row, int col) =>
-            store.TryGet(row * 1024 + col, out var c) ? c.Value : CellValue.Blank;
+            store.TryGet(CellAddress.KeyOf(row, col), out var c) ? c.Value : CellValue.Blank;
 
         public bool TryResolveName(string name, out RangeAddress target, out bool isRange)
         {
@@ -544,7 +697,9 @@ public sealed class Workbook
             foreach (int key in store.KeysInRange(r))
             {
                 store.TryGet(key, out var c);
-                if (c.Value.Kind != ValueKind.Blank) yield return (key / 1024, key % 1024, c.Value);
+                if (c.Value.Kind == ValueKind.Blank) continue;
+                var a = CellAddress.FromKey(key);
+                yield return (a.Row, a.Col, c.Value);
             }
         }
     }

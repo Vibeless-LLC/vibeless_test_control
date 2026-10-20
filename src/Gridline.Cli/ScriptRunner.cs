@@ -144,12 +144,47 @@ internal sealed class ScriptRunner
                 break;
             }
             case "INSERTROWS": case "DELETEROWS": case "INSERTCOLS": case "DELETECOLS":
-                Err("not implemented");
+            {
+                // <row> <n> or <letters> <n>; exactly two single-space-separated arguments (§10.3).
+                var parts = rest.Split(' ');
+                bool cols = cmd is "INSERTCOLS" or "DELETECOLS";
+                int at = 0;
+                if (parts.Length != 2
+                    || !(cols ? ColumnName.TryParse(parts[0], out at) && at <= CellAddress.MaxColumns : TryPositiveInt(parts[0], out at))
+                    || !TryPositiveInt(parts[1], out int n))
+                {
+                    Err("usage: " + cmd + (cols ? " <col> <n>" : " <row> <n>"));
+                    break;
+                }
+                switch (cmd)
+                {
+                    case "INSERTROWS": _wb.InsertRows(at, n); break;
+                    case "DELETEROWS": _wb.DeleteRows(at, n); break;
+                    case "INSERTCOLS": _wb.InsertColumns(at, n); break;
+                    default: _wb.DeleteColumns(at, n); break;
+                }
                 break;
+            }
             default:
                 Err("unknown command: " + (sp < 0 ? line : line[..sp]));
                 break;
         }
+    }
+
+    /// <summary>ASCII digits only (no sign, no whitespace), value 1..int.MaxValue.</summary>
+    private static bool TryPositiveInt(string s, out int value)
+    {
+        value = 0;
+        if (s.Length == 0) return false;
+        long v = 0;
+        foreach (char c in s)
+        {
+            if (c is < '0' or > '9') return false;
+            v = v * 10 + (c - '0');
+            if (v > int.MaxValue) return false;
+        }
+        value = (int)v;
+        return v >= 1;
     }
 
     private static string FirstToken(string s)

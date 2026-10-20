@@ -200,6 +200,20 @@ public class NamesTests
     }
 
     [Fact]
+    public void Redefine_SameTargetDifferentForm_Recalcs()
+    {
+        var wb = new Workbook();
+        wb.SetCell("A1", "4");
+        wb.DefineName("R", "$A$1:$A$1");
+        wb.SetCell("B1", "=R");
+        Assert.Equal("E:#VALUE!", V(wb, "B1"));
+        wb.DefineName("R", "$A$1");
+        Assert.Equal("N:4", V(wb, "B1"));
+        wb.Undo();
+        Assert.Equal("E:#VALUE!", V(wb, "B1"));
+    }
+
+    [Fact]
     public void Redefine_KeepsNewCasing_Recalcs()
     {
         var wb = new Workbook();

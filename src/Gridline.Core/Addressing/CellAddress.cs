@@ -6,10 +6,15 @@ public readonly record struct CellAddress(int Row, int Col)
     public const int MaxRows = 100_000;
     public const int MaxColumns = 702;
 
-    /// <summary>Row-major sort key.</summary>
-    public int Key => Row * 1024 + Col;
+    /// <summary>Multiplier packing the row above the column in <see cref="Key"/> (column fits in 10 bits).</summary>
+    internal const int KeyStride = 1024;
 
-    public static CellAddress FromKey(int key) => new(key / 1024, key % 1024);
+    /// <summary>Row-major sort key.</summary>
+    public int Key => Row * KeyStride + Col;
+
+    internal static int KeyOf(int row, int col) => row * KeyStride + col;
+
+    public static CellAddress FromKey(int key) => new(key / KeyStride, key % KeyStride);
 
     /// <summary>Accepts [$]COL[$]ROW, case-insensitive, within grid bounds.</summary>
     public static bool TryParse(string? s, out CellAddress a)

@@ -43,12 +43,20 @@ public class UndoProperties
             return Gen.Elements(dests).SelectMany(d => Gen.Elements(d, d.ToLowerInvariant())).Select(d => new Op("Paste", [(r, d)]));
         });
 
+    // Insert/delete rows or columns (§9.5): Edits[0] = (at, count). Cells pushed out of the pool are still observed
+    // through the used-cell snapshot, and later ops may pull them back.
+    private static readonly Gen<Op> StructuralGen =
+        Gen.Elements("InsRows", "DelRows", "InsCols", "DelCols").SelectMany(k =>
+            Gen.Choose(1, 4).SelectMany(at => Gen.Choose(1, 2).Select(n =>
+                new Op(k, [(at.ToString(System.Globalization.CultureInfo.InvariantCulture), n.ToString(System.Globalization.CultureInfo.InvariantCulture))]))));
+
     private static readonly Gen<Op> OpGen = Gen.Frequency(
         (4, EditGen.Select(e => new Op("Set", [e]))),
         (4, Gen.Choose(0, 6).SelectMany(n => Gen.ArrayOf(EditGen, n)).Select(es => new Op("Batch", es))),
         (3, PasteGen),
         (2, Gen.Elements("Rate", "rate", "Tot").SelectMany(n => Gen.Elements("$A$1", "$B$2", "$A$1:$B$2", "$A$1:$A$1").Select(r => new Op("Define", [(n, r)])))),
         (1, Gen.Elements("Rate", "rate", "Tot", "Nope").Select(n => new Op("Delete", [(n, "")]))),
+        (2, StructuralGen),
         (1, Gen.Constant(new Op("Save", []))));
 
     private static readonly Gen<Op[]> OpsGen = Gen.Choose(0, 30).SelectMany(n => Gen.ArrayOf(OpGen, n));
@@ -61,6 +69,10 @@ public class UndoProperties
             case "Paste": wb.CopyPaste(op.Edits[0].Address, op.Edits[0].Input); break;
             case "Set": wb.SetCell(op.Edits[0].Address, op.Edits[0].Input); break;
             case "Define": wb.DefineName(op.Edits[0].Address, op.Edits[0].Input); break;
+            case "InsRows": wb.InsertRows(int.Parse(op.Edits[0].Address, System.Globalization.CultureInfo.InvariantCulture), int.Parse(op.Edits[0].Input, System.Globalization.CultureInfo.InvariantCulture)); break;
+            case "DelRows": wb.DeleteRows(int.Parse(op.Edits[0].Address, System.Globalization.CultureInfo.InvariantCulture), int.Parse(op.Edits[0].Input, System.Globalization.CultureInfo.InvariantCulture)); break;
+            case "InsCols": wb.InsertColumns(int.Parse(op.Edits[0].Address, System.Globalization.CultureInfo.InvariantCulture), int.Parse(op.Edits[0].Input, System.Globalization.CultureInfo.InvariantCulture)); break;
+            case "DelCols": wb.DeleteColumns(int.Parse(op.Edits[0].Address, System.Globalization.CultureInfo.InvariantCulture), int.Parse(op.Edits[0].Input, System.Globalization.CultureInfo.InvariantCulture)); break;
             case "Delete":
                 try { wb.DeleteName(op.Edits[0].Address); } catch (ArgumentException) { /* unknown name: no change */ }
                 break;
@@ -68,8 +80,12 @@ public class UndoProperties
         }
     }
 
-    private static string[] Inputs_(Workbook wb) => Pool.Select(wb.GetInput).Append(string.Join(";", wb.GetNames().Select(n => n.Key + "=" + n.Value))).ToArray();
-    private static string[] Values(Workbook wb) => Pool.Select(a => wb.GetValue(a).ToCanonicalString()).ToArray();
+    // Pool inputs, then the names, then every used cell (structural ops can move cells outside the pool).
+    private static string[] Inputs_(Workbook wb) => Pool.Select(wb.GetInput)
+        .Append(string.Join(";", wb.GetNames().Select(n => n.Key + "=" + n.Value)))
+        .Append(string.Join("\u0001", wb.GetUsedAddresses().Select(a => a + "=" + wb.GetInput(a)))).ToArray();
+    private static KeyValuePair<string, string>[] UsedCells(Workbook wb) => wb.GetUsedAddresses().Select(a => KeyValuePair.Create(a, wb.GetInput(a))).ToArray();
+    private static string[] Values(Workbook wb) => Pool.Concat(wb.GetUsedAddresses()).Select(a => a + "=" + wb.GetValue(a).ToCanonicalString()).ToArray();
 
     [Property(MaxTest = 200)]
     public Property RandomOps_UndoAll_RestoresInitial() =>
@@ -91,6 +107,7 @@ public class UndoProperties
             var postInputs = Inputs_(wb);
             var postValues = Values(wb);
             var postNames = wb.GetNames();
+            var postCells = UsedCells(wb);
 
             int undone = 0;
             while (wb.Undo()) { undone++; dirtyOk &= wb.IsDirty == (steps - undone != saved); }
@@ -101,7 +118,7 @@ public class UndoProperties
             int redone = 0;
             while (wb.Redo()) { redone++; dirtyOk &= wb.IsDirty == (redone != saved); }
             // Incremental recalc after redo agrees with a full recalc of the same inputs.
-            var fresh = Workbook.FromSnapshot(Pool.Zip(postInputs).Where(p => p.Second.Length > 0).Select(p => KeyValuePair.Create(p.First, p.Second)).ToArray(), postNames);
+            var fresh = Workbook.FromSnapshot(postCells, postNames);
             bool replayed = Inputs_(wb).SequenceEqual(postInputs) && Values(wb).SequenceEqual(postValues)
                             && Values(fresh).SequenceEqual(postValues) && redone == undone && !wb.CanRedo;
 

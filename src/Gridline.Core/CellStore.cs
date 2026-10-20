@@ -16,8 +16,8 @@ internal sealed class CellStore
     /// <summary>Occupied rows of one column, ascending, and their cells at the same indices.</summary>
     internal sealed class Column
     {
-        public readonly List<int> Rows = [];
-        public readonly List<Cell> Cells = [];
+        public List<int> Rows = [];
+        public List<Cell> Cells = [];
 
         /// <summary>Index of the first row ≥ <paramref name="row"/>.</summary>
         public int LowerBound(int row)
@@ -39,21 +39,7 @@ internal sealed class CellStore
         ArgumentNullException.ThrowIfNull(c);
         var a = CellAddress.FromKey(key);
         var col = _columns[a.Col] ??= new Column();
-        if (_cells.TryAdd(key, c))
-        {
-            // Appending in row order (the common load case) is O(1).
-            if (col.Rows.Count == 0 || col.Rows[^1] < a.Row)
-            {
-                col.Rows.Add(a.Row);
-                col.Cells.Add(c);
-            }
-            else
-            {
-                int i = ~col.Rows.BinarySearch(a.Row);
-                col.Rows.Insert(i, a.Row);
-                col.Cells.Insert(i, c);
-            }
-        }
+        if (_cells.TryAdd(key, c)) ColumnInsert(col, a.Row, c);
         else
         {
             _cells[key] = c;
@@ -70,6 +56,89 @@ internal sealed class CellStore
         col.Rows.RemoveAt(i);
         col.Cells.RemoveAt(i);
     }
+
+    private static void ColumnInsert(Column col, int row, Cell c)
+    {
+        // Appending in row order (the common load case) is O(1).
+        if (col.Rows.Count == 0 || col.Rows[^1] < row)
+        {
+            col.Rows.Add(row);
+            col.Cells.Add(c);
+        }
+        else
+        {
+            int i = ~col.Rows.BinarySearch(row);
+            col.Rows.Insert(i, row);
+            col.Cells.Insert(i, c);
+        }
+    }
+
+    /// <summary>Columns receiving more writes than this in one <see cref="SetMany"/> are rebuilt by a merge.</summary>
+    private const int MergeThreshold = 16;
+
+    /// <summary>
+    /// Applies many writes (null cell = remove) with distinct keys. A column receiving many writes is rebuilt by one
+    /// linear merge of its sorted lists with the sorted writes, so bulk moves (insert/delete of rows) cost
+    /// O(column size + writes log writes) per column instead of one list shift per write.
+    /// </summary>
+    public void SetMany(IReadOnlyList<(int Key, Cell? Cell)> writes)
+    {
+        if (writes.Count <= MergeThreshold)
+        {
+            foreach (var (key, cell) in writes)
+                if (cell is null) Remove(key); else Set(key, cell);
+            return;
+        }
+        var byCol = new Dictionary<int, List<(int Row, Cell? Cell)>>();
+        foreach (var (key, cell) in writes)
+        {
+            var a = CellAddress.FromKey(key);
+            if (cell is null) { if (!_cells.Remove(key)) continue; }
+            else _cells[key] = cell;
+            if (!byCol.TryGetValue(a.Col, out var list)) byCol[a.Col] = list = [];
+            list.Add((a.Row, cell));
+        }
+        foreach (var (c, list) in byCol)
+        {
+            var col = _columns[c] ??= new Column();
+            if (list.Count <= MergeThreshold)
+            {
+                foreach (var (row, cell) in list)
+                {
+                    int i = col.Rows.BinarySearch(row);
+                    if (cell is null) { col.Rows.RemoveAt(i); col.Cells.RemoveAt(i); }
+                    else if (i >= 0) col.Cells[i] = cell;
+                    else ColumnInsert(col, row, cell);
+                }
+                continue;
+            }
+            list.Sort(static (x, y) => x.Row.CompareTo(y.Row));
+            var oldRows = col.Rows;
+            var oldCells = col.Cells;
+            var rows = new List<int>(oldRows.Count + list.Count);
+            var cells = new List<Cell>(oldRows.Count + list.Count);
+            int p = 0, q = 0;
+            while (p < oldRows.Count || q < list.Count)
+            {
+                if (q == list.Count || (p < oldRows.Count && oldRows[p] < list[q].Row))
+                {
+                    rows.Add(oldRows[p]); cells.Add(oldCells[p]); p++;
+                    continue;
+                }
+                if (p < oldRows.Count && oldRows[p] == list[q].Row) p++; // replaced or removed
+                if (list[q].Cell is { } nc) { rows.Add(list[q].Row); cells.Add(nc); }
+                q++;
+            }
+            col.Rows = rows;
+            col.Cells = cells;
+        }
+    }
+
+    /// <summary>All stored cells (unordered). Must not be enumerated while the store is modified.</summary>
+    public IReadOnlyDictionary<int, Cell> All => _cells;
+
+    /// <summary>The highest occupied row of column <paramref name="col"/>, or 0 if it has none.</summary>
+    public int LastRow(int col) => GetColumn(col) is { Rows.Count: > 0 } c ? c.Rows[^1] : 0;
 
     /// <summary>The occupied rows and cells of column <paramref name="col"/>, or null if it has none.</summary>
     public Column? GetColumn(int col) => (uint)col < (uint)_columns.Length ? _columns[col] : null;
@@ -97,7 +166,7 @@ internal sealed class CellStore
         for (int row = r.TopLeft.Row; row <= r.BottomRight.Row; row++)
             for (int col = r.TopLeft.Col; col <= r.BottomRight.Col; col++)
             {
-                int key = row * 1024 + col;
+                int key = CellAddress.KeyOf(row, col);
                 if (_cells.ContainsKey(key)) yield return key;
             }
     }
@@ -108,7 +177,7 @@ internal sealed class CellStore
         if (_columns[c] is not { } col) yield break;
         var rows = col.Rows;
         for (int i = col.LowerBound(r.TopLeft.Row); i < rows.Count && rows[i] <= r.BottomRight.Row; i++)
-            yield return rows[i] * 1024 + c;
+            yield return CellAddress.KeyOf(rows[i], c);
     }
 
     private IEnumerable<int> Merge(RangeAddress r)
@@ -120,14 +189,14 @@ internal sealed class CellStore
         {
             if (_columns[c] is not { Rows.Count: > 0 } col) continue;
             int i = col.LowerBound(top);
-            if (i < col.Rows.Count && col.Rows[i] <= bottom) heap.Enqueue((c, i), col.Rows[i] * 1024 + c);
+            if (i < col.Rows.Count && col.Rows[i] <= bottom) heap.Enqueue((c, i), CellAddress.KeyOf(col.Rows[i], c));
         }
         while (heap.TryDequeue(out var cur, out int key))
         {
             yield return key;
             var rows = _columns[cur.Col]!.Rows;
             int next = cur.Index + 1;
-            if (next < rows.Count && rows[next] <= bottom) heap.Enqueue((cur.Col, next), rows[next] * 1024 + cur.Col);
+            if (next < rows.Count && rows[next] <= bottom) heap.Enqueue((cur.Col, next), CellAddress.KeyOf(rows[next], cur.Col));
         }
     }
 }
