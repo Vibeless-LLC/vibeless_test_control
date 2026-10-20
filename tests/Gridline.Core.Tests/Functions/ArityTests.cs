@@ -32,6 +32,9 @@ public class ArityTests
         { "ROW", 0, 1 }, { "COLUMN", 0, 1 }, { "ROWS", 1, 1 }, { "COLUMNS", 1, 1 },
         // §7.5 Conditional aggregation — 3
         { "SUMIF", 2, 3 }, { "COUNTIF", 2, 2 }, { "AVERAGEIF", 2, 3 },
+        // §7.6 Date — 8
+        { "DATE", 3, 3 }, { "YEAR", 1, 1 }, { "MONTH", 1, 1 }, { "DAY", 1, 1 }, { "WEEKDAY", 1, 2 },
+        { "EDATE", 2, 2 }, { "EOMONTH", 2, 2 }, { "DAYS", 2, 2 },
     };
 
     private static string Call(string name, int argCount) =>
@@ -59,7 +62,7 @@ public class ArityTests
     public void Registry_HasExactlyTheSpecFunctions()
     {
         var expected = SpecArities.Select(row => (string)row[0]).OrderBy(n => n, StringComparer.Ordinal).ToArray();
-        Assert.Equal(62, expected.Length);
+        Assert.Equal(70, expected.Length);
         Assert.Equal(expected, FunctionRegistry.CreateDefault().Functions.Keys.OrderBy(n => n, StringComparer.Ordinal).ToArray());
     }
 

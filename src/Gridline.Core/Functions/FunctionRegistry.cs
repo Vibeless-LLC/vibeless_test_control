@@ -23,6 +23,7 @@ internal sealed class FunctionRegistry
         MathFunctions.Register(r);
         LogicFunctions.Register(r);
         TextFunctions.Register(r);
+        DateFunctions.Register(r);
         ConditionalFunctions.Register(r);
         LookupFunctions.Register(r);
         return r;
