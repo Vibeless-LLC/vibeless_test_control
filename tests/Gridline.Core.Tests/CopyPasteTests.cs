@@ -43,4 +43,32 @@ public class CopyPasteTests
         wb.CopyPaste("A1", "A2");
         Assert.Equal("=Total+1", wb.GetInput("A2"));
     }
+    [Fact]
+    public void Paste_WholeGridSource_IsSparse()
+    {
+        var wb = new Workbook();
+        wb.SetCell("A1", "1"); wb.SetCell("B1", "=a1+1"); wb.SetCell("ZZ100000", "end");
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        wb.CopyPaste("A1:ZZ100000", "A1");
+        sw.Stop();
+        long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        Assert.True(allocated < 64L * 1024 * 1024, $"allocated {allocated}");
+        Assert.True(sw.ElapsedMilliseconds < 2000, $"took {sw.ElapsedMilliseconds} ms");
+        Assert.Equal("=A1+1", wb.GetInput("B1"));
+        Assert.Equal("end", wb.GetInput("ZZ100000"));
+    }
+    [Fact]
+    public void Paste_FullColumnSource_ClearsOnlyPopulatedDestination()
+    {
+        var wb = new Workbook();
+        wb.SetCell("A5", "x"); wb.SetCell("B9", "old"); wb.SetCell("B100000", "old2");
+        wb.CopyPaste("A1:A100000", "B1");
+        Assert.Equal("x", wb.GetInput("B5"));
+        Assert.Equal("", wb.GetInput("B9"));
+        Assert.Equal("", wb.GetInput("B100000"));
+        wb.Undo();
+        Assert.Equal("old", wb.GetInput("B9"));
+        Assert.Equal("old2", wb.GetInput("B100000"));
+    }
 }

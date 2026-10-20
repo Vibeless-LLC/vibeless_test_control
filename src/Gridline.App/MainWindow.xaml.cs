@@ -13,6 +13,7 @@ public partial class MainWindow : Window
     private readonly DocumentSession _session;
     private readonly SheetController _controller;
     private readonly DocumentLifecycle _lifecycle;
+    private readonly ClipboardService _clipboard;
 
     private readonly RecoveryService? _recovery;
     private bool _autosaveFailed;
@@ -35,6 +36,7 @@ public partial class MainWindow : Window
         CellEditor.Height = GridControl.RowHeight;
         _controller = new SheetController(Sheet.Selection) { Workbook = _session.Workbook };
         Sheet.Workbook = _session.Workbook;
+        _clipboard = new ClipboardService(new WpfClipboard(), () => _session.Workbook);
         Title = _session.Title;
         _session.StateChanged += (_, _) => OnSessionStateChanged();
         if (_recovery is not null)
@@ -303,6 +305,16 @@ public partial class MainWindow : Window
 
     private void CanUndo(object s, CanExecuteRoutedEventArgs e) => e.CanExecute = _session.Workbook.CanUndo;
     private void CanRedo(object s, CanExecuteRoutedEventArgs e) => e.CanExecute = _session.Workbook.CanRedo;
+    // Copy/Paste reach these bindings only when the grid has focus; a focused TextBox handles them as text clipboard
+    // operations. The Edit menu items are command-bound, so they act on the grid whenever no text box owns focus.
+    private void CanCopyPaste(object s, CanExecuteRoutedEventArgs e) => e.CanExecute = !_controller.IsEditing;
+
+    private void OnCopy(object s, ExecutedRoutedEventArgs e) => ShowClipboard(_clipboard.Copy(Sheet.Selection.Range));
+
+    private void OnPaste(object s, ExecutedRoutedEventArgs e) => ShowClipboard(_clipboard.Paste(Sheet.Selection.Active));
+
+    private void ShowClipboard(ClipboardResult r) => ClipboardStatus.Text = r.Message;
+
     private void OnExit(object s, ExecutedRoutedEventArgs e) => Close();
 }
 

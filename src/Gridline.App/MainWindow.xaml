@@ -10,6 +10,8 @@
         <CommandBinding Command="SaveAs" Executed="OnSaveAs" />
         <CommandBinding Command="Undo" Executed="OnUndo" CanExecute="CanUndo" />
         <CommandBinding Command="Redo" Executed="OnRedo" CanExecute="CanRedo" />
+        <CommandBinding Command="Copy" Executed="OnCopy" CanExecute="CanCopyPaste" />
+        <CommandBinding Command="Paste" Executed="OnPaste" CanExecute="CanCopyPaste" />
         <CommandBinding Command="Close" Executed="OnExit" />
     </Window.CommandBindings>
     <Window.InputBindings>
@@ -58,6 +60,9 @@
             </StatusBarItem>
             <StatusBarItem>
                 <TextBlock x:Name="AutosaveStatus" AutomationProperties.AutomationId="AutosaveStatus" />
+            </StatusBarItem>
+            <StatusBarItem>
+                <TextBlock x:Name="ClipboardStatus" AutomationProperties.AutomationId="ClipboardStatus" />
             </StatusBarItem>
         </StatusBar>
         <Grid x:Name="GridHost">

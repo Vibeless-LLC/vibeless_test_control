@@ -164,32 +164,44 @@ public sealed class Workbook
             throw new ArgumentException("Destination extends beyond the grid.", nameof(destinationTopLeft));
 
         int dRow = dst.Row - src.TopLeft.Row, dCol = dst.Col - src.TopLeft.Col;
-        var pasted = new string[rows * cols];
-        for (int r = 0; r < rows; r++)
-        for (int c = 0; c < cols; c++)
+
+        // Sparse: cost is O(populated source cells + populated destination cells), never rows * cols.
+        var pasted = new Dictionary<int, string>();
+        foreach (var (key, cell) in UsedIn(src))
         {
-            int key = new CellAddress(src.TopLeft.Row + r, src.TopLeft.Col + c).Key;
-            string text = "";
-            if (_store.TryGet(key, out var cell))
-            {
-                text = cell.Input;
-                if (cell.Kind == CellKind.Formula && cell.Formula is { IsParseError: false, Root: { } root })
-                    text = FormulaPrinter.Print(ReferenceRewriter.Shift(root, dRow, dCol, out _), NameCasing);
-            }
+            string text = cell.Input;
+            if (cell.Kind == CellKind.Formula && cell.Formula is { IsParseError: false, Root: { } root })
+                text = FormulaPrinter.Print(ReferenceRewriter.Shift(root, dRow, dCol, out _), NameCasing);
             // Re-emitted formulas can grow (shifted refs get longer, #REF!); keep the input-length invariant.
             if (text.Length > MaxInputLength)
                 throw new ArgumentException($"Pasted input exceeds {MaxInputLength} characters.", nameof(destinationTopLeft));
-            pasted[r * cols + c] = text;
+            var a = CellAddress.FromKey(key);
+            pasted[new CellAddress(a.Row + dRow, a.Col + dCol).Key] = text;
         }
 
-        var edits = new List<CellEdit>(pasted.Length);
-        for (int r = 0; r < rows; r++)
-        for (int c = 0; c < cols; c++)
-        {
-            int key = new CellAddress(dst.Row + r, dst.Col + c).Key;
-            edits.Add(new CellEdit(key, CurrentInput(key), pasted[r * cols + c]));
-        }
+        var dstRange = new RangeAddress(dst, new CellAddress(dst.Row + rows - 1, dst.Col + cols - 1));
+        foreach (var (key, _) in UsedIn(dstRange)) pasted.TryAdd(key, ""); // source blank clears populated destination
+
+        var keys = new int[pasted.Count];
+        pasted.Keys.CopyTo(keys, 0);
+        Array.Sort(keys); // row-major
+        var edits = new List<CellEdit>(keys.Length);
+        foreach (int key in keys) edits.Add(new CellEdit(key, CurrentInput(key), pasted[key]));
         Commit(edits, newNames: null, record: true);
+    }
+
+    /// <summary>Populated cells inside <paramref name="range"/> via the per-column sorted lists (no per-position probing).</summary>
+    private List<(int Key, Cell Cell)> UsedIn(RangeAddress range)
+    {
+        var result = new List<(int, Cell)>();
+        for (int c = range.TopLeft.Col; c <= range.BottomRight.Col; c++)
+        {
+            var col = _store.GetColumn(c);
+            if (col is null) continue;
+            for (int i = col.LowerBound(range.TopLeft.Row); i < col.Rows.Count && col.Rows[i] <= range.BottomRight.Row; i++)
+                result.Add((new CellAddress(col.Rows[i], c).Key, col.Cells[i]));
+        }
+        return result;
     }
 
     private string? NameCasing(string upper) => _names.TryGetValue(upper, out var d) ? d.Name : null;
