@@ -169,3 +169,6 @@ Non-trivial implementation choices, with spec section references.
 ## §11.7 / §12 P-6 UI tests (Task 11)
 - UI tests set up state deterministically through the name box / formula bar (UIA Value pattern + Enter, with focus verified) and only type into the grid where the test is about grid typing; Shift+arrow uses raw SendInput with KEYEVENTF_EXTENDEDKEY (FlaUI's Keyboard omits it). Menus are opened with a real click and items invoked via the Invoke pattern.
 - P-6 uses a generated P-1 file (50k numbers, 50k two-ref formulas) and measures process start to A1 `SelectionValue` = `N:...`, median of 3 launches.
+
+## Phase 2 final-review fixes
+- **CLI BEGIN…END validates at END (§10.3, §9.3).** Inside a batch, `SET`/`SETX` buffer the address text exactly as given (a bare `SET` buffers an empty address) and `SETX` is unescaped on arrival (unescaping cannot fail). END hands the buffer to one `ApplyBatch`, which validates every address and input length before changing anything, so any bad line yields exactly one `ERR` line at END, nothing is applied, and the batch is closed. Valid batches remain one undo step.

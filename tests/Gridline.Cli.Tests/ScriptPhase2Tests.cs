@@ -19,6 +19,29 @@ public class ScriptPhase2Tests : IDisposable
         Assert.Equal(4, r.stdout.Split('\n').Count(l => l.StartsWith("ERR\t")));
         Assert.EndsWith("A1\tN:1\nB1\tBLANK\n", r.stdout);
     }
+    private static int ErrCount(string stdout) => stdout.Split('\n').Count(l => l.StartsWith("ERR\t"));
+    [Fact] public void Begin_InvalidAddress_Atomic_OneErrAtEnd()
+    {
+        var r = Run("BEGIN\nSET A0 1\nSET A9 9\nEND\nGET A9\n","script");
+        Assert.Equal(4, r.code);
+        Assert.Equal(1, ErrCount(r.stdout));
+        Assert.EndsWith("A9\tBLANK\n", r.stdout);
+    }
+    [Fact] public void Begin_OverlongSetx_Atomic()
+    {
+        var r = Run("BEGIN\nSET A1 1\nSETX B1 " + new string('a', 40000) + "\nEND\nGET A1\n","script");
+        Assert.Equal(4, r.code);
+        Assert.Equal(1, ErrCount(r.stdout));
+        Assert.EndsWith("A1\tBLANK\n", r.stdout);
+    }
+    [Fact] public void Begin_BareSet_PoisonsBatch()
+    {
+        var r = Run("BEGIN\nSET A1 1\nSET\nEND\nGET A1\n","script");
+        Assert.Equal(4, r.code);
+        Assert.Equal(1, ErrCount(r.stdout));
+        Assert.EndsWith("A1\tBLANK\n", r.stdout);
+    }
+    [Fact] public void Begin_ValidBatch_StillOneUndoStep() => Assert.Equal("OK\nNOOP\nA1\tBLANK\nB1\tBLANK\n", Run("BEGIN\nSET A1 1\nSET B1 2\nEND\nUNDO\nUNDO\nGET A1\nGET B1\n","script").stdout);
     [Fact] public void End_WithoutBegin_Err() { var r = Run("END\n","script"); Assert.Equal(4, r.code); Assert.StartsWith("ERR\t", r.stdout); }
     [Fact] public void Begin_WhileOpen_Err() { var r = Run("BEGIN\nBEGIN\nSET A1 1\nEND\nGET A1\n","script"); Assert.Equal(4, r.code); Assert.StartsWith("ERR\t", r.stdout); Assert.EndsWith("A1\tN:1\n", r.stdout); }
     [Fact] public void Begin_Unterminated_DiscardedWithErr()

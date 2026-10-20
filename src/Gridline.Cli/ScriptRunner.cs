@@ -86,10 +86,12 @@ internal sealed class ScriptRunner
                 int sp2 = rest.IndexOf(' ');
                 string addrText = sp2 < 0 ? rest : rest[..sp2];
                 string input = sp2 < 0 ? "" : rest[(sp2 + 1)..];
-                if (!TryAddr(addrText, out var a)) return;
                 if (cmd == "SETX") input = Escaping.Unescape(input);
-                if (_batchOpen) _pending.Add(new(a, input));
-                else _wb.SetCell(a, input);
+                // Inside a batch the address text is buffered as given (a bare SET buffers ""), so END's single
+                // ApplyBatch validates every address and length and applies nothing on failure (§9.3, §10.3).
+                if (_batchOpen) { _pending.Add(new(addrText, input)); break; }
+                if (!TryAddr(addrText, out var a)) return;
+                _wb.SetCell(a, input);
                 break;
             }
             case "GET":
