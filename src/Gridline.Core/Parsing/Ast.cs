@@ -7,9 +7,10 @@ internal sealed record NumberNode(double Value, string Lexeme) : Node;
 internal sealed record StringNode(string Value) : Node;
 internal sealed record BoolNode(bool Value) : Node;
 internal sealed record ErrorNode(string Code) : Node;
-internal sealed record RefNode(int Row, int Col, bool RowAbs, bool ColAbs) : Node;
-/// <summary>Corners are kept as written; normalize at evaluation time.</summary>
-internal sealed record RangeNode(RefNode First, RefNode Second) : Node;
+/// <summary><c>Sheet</c> is the qualifying sheet name as written (CR1.2), or null when unqualified.</summary>
+internal sealed record RefNode(int Row, int Col, bool RowAbs, bool ColAbs, string? Sheet = null) : Node;
+/// <summary>Corners are kept as written; normalize at evaluation time. The range's sheet is on the range; its corners are unqualified.</summary>
+internal sealed record RangeNode(RefNode First, RefNode Second, string? Sheet = null) : Node;
 internal sealed record NameNode(string Name) : Node;
 internal sealed record UnaryNode(char Op, Node Operand) : Node;
 internal sealed record PercentNode(Node Operand) : Node;

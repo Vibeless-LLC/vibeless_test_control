@@ -238,3 +238,8 @@ Non-trivial implementation choices, with spec section references.
 ## CR-1 Task 1 (sheet names and qualified addresses)
 - CR1.2: `SheetNames.TryParsePrefix` accepts any non-empty quoted text (validity per CR1.1 is the caller's job); an unquoted prefix is accepted only if it does not need quoting, so `A1!B2`, `TRUE!A1` and `My Sheet!A1` are not prefixes. `QualifiedAddress.TryParse` then fails on them because the remaining text is not an address.
 - CR1.2: `QualifiedAddress.IsRange` is true iff a ':' appears after the prefix (so `B2:B2` is a range of one cell). `TryParseColumnOrRow` takes columns A..ZZ and rows 1..int.MaxValue (no grid-bound check; callers validate).
+
+## CR-1 Task 2 (sheet prefixes in the formula language)
+- CR1.2/§5.1: no whitespace is allowed between `!` and the reference (`Sheet2! A1` is `#PARSE!`); the tokenizer tries a sheet prefix before the number, word and `'` branches and fails unless a cell reference follows immediately.
+- CR1.2/§5.2: sheet prefixes are accepted only before cell references, never before names or function calls (`Sheet2!Rate`, `Sheet2!SUM(A1)` are `#PARSE!`). A range carries one prefix on the `RangeNode` (its corners stay unqualified); a second prefix after `:` is a syntax error.
+- CR1.2/§5.5: `FormulaPrinter.Print` takes an optional `sheetCasing` (upper-cased name in, defined casing or null out) and emits `SheetNames.Format(name) + "!"`, so quotes are dropped when not required (`'Sheet1'!A1` → `Sheet1!A1`). `ReferenceRewriter.Shift` preserves `Sheet`; `Structural` gained an `applies(sheet)` predicate; `RenameSheet(old, null)` turns matching refs/ranges into `#REF!`. Evaluator and dependency extraction still ignore `Sheet` until Tasks 3/4.

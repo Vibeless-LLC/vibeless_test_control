@@ -105,7 +105,7 @@ internal static class Parser
             return Primary();
         }
 
-        private static RefNode ToRef(Token t)
+        private static RefNode ToRef(Token t, string? sheet = null)
         {
             string s = t.Text;
             if (!CellAddress.TryParse(s, out var a)) throw new SyntaxError();
@@ -113,7 +113,7 @@ internal static class Parser
             int letters = colAbs ? 1 : 0;
             while (letters < s.Length && char.IsAsciiLetter(s[letters])) letters++;
             bool rowAbs = letters < s.Length && s[letters] == '$';
-            return new RefNode(a.Row, a.Col, rowAbs, colAbs);
+            return new RefNode(a.Row, a.Col, rowAbs, colAbs, sheet);
         }
 
         private Node Primary()
@@ -134,18 +134,12 @@ internal static class Parser
                 case TokenKind.Error: _i++; return new ErrorNode(t.Text);
                 case TokenKind.Name: _i++; return new NameNode(t.Text);
                 case TokenKind.CellRef:
-                {
+                    return Reference(null);
+                case TokenKind.SheetPrefix:
+                    // CR1.2: SheetPrefix CellRef [":" CellRef]; the tokenizer guarantees the CellRef follows.
                     _i++;
-                    RefNode first = ToRef(t);
-                    if (IsOp(":"))
-                    {
-                        _i++;
-                        if (Cur.Kind != TokenKind.CellRef) throw new SyntaxError();
-                        Token t2 = Cur; _i++;
-                        return new RangeNode(first, ToRef(t2));
-                    }
-                    return first;
-                }
+                    if (Cur.Kind != TokenKind.CellRef) throw new SyntaxError();
+                    return Reference(t.Text);
                 case TokenKind.LParen:
                 {
                     _i++;
@@ -160,6 +154,20 @@ internal static class Parser
                 default:
                     throw new SyntaxError();
             }
+        }
+
+        // Cur is a CellRef. A range's sheet goes on the RangeNode; its corners stay unqualified.
+        private Node Reference(string? sheet)
+        {
+            Token t = Cur; _i++;
+            if (IsOp(":"))
+            {
+                _i++;
+                if (Cur.Kind != TokenKind.CellRef) throw new SyntaxError();
+                Token t2 = Cur; _i++;
+                return new RangeNode(ToRef(t), ToRef(t2), sheet);
+            }
+            return ToRef(t, sheet);
         }
 
         private Node Call(Token fn)

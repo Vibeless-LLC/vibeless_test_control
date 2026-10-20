@@ -3,7 +3,7 @@ using Gridline.Core.Addressing;
 namespace Gridline.Core.Parsing;
 
 /// <summary>
-/// Rewrites the references of a formula tree: paste offsets (§9.4) and structural insert/delete (§9.5). The left
+/// Rewrites the references of a formula tree: paste offsets (§9.4) and structural insert/delete (§9.5) and sheet renames (CR1.2). The left
 /// spine of binary chains is rebuilt iteratively; other nesting recurses once per level (bounded by Parser.MaxDepth).
 /// </summary>
 internal static class ReferenceRewriter
@@ -31,10 +31,29 @@ internal static class ReferenceRewriter
     /// <c>#REF!</c> whole. An unchanged range keeps its corners as written. <paramref name="changed"/> is true if
     /// any reference moved or became <c>#REF!</c>.
     /// </summary>
-    public static Node Structural(Node root, StructuralEdit e, out bool changed)
+    public static Node Structural(Node root, StructuralEdit e, out bool changed) =>
+        Structural(root, e, static _ => true, out changed);
+
+    /// <summary>
+    /// As <see cref="Structural(Node, StructuralEdit, out bool)"/>, but a reference or range is adjusted only when
+    /// <paramref name="applies"/> returns true for its <c>Sheet</c> (null when unqualified) (CR1.2).
+    /// </summary>
+    public static Node Structural(Node root, StructuralEdit e, Func<string?, bool> applies, out bool changed)
     {
         bool ch = false;
-        var result = Walk(root, new StructuralMap(e), ref ch);
+        var result = Walk(root, new StructuralMap(e, applies), ref ch);
+        changed = ch;
+        return result;
+    }
+
+    /// <summary>
+    /// References and ranges qualified with <paramref name="oldName"/> (OrdinalIgnoreCase) are requalified with
+    /// <paramref name="newName"/>, or become <c>#REF!</c> when it is null (CR1.2). Unqualified references are untouched.
+    /// </summary>
+    public static Node RenameSheet(Node root, string oldName, string? newName, out bool changed)
+    {
+        bool ch = false;
+        var result = Walk(root, new RenameMap(oldName, newName), ref ch);
         changed = ch;
         return result;
     }
@@ -77,16 +96,17 @@ internal static class ReferenceRewriter
             }
             if (ReferenceEquals(f, rg.First) && ReferenceEquals(g, rg.Second)) return rg;
             changed = true;
-            return new RangeNode(f, g);
+            return rg with { First = f, Second = g };
         }
     }
 
-    private sealed class StructuralMap(StructuralEdit e) : RefMap
+    private sealed class StructuralMap(StructuralEdit e, Func<string?, bool> applies) : RefMap
     {
         private readonly int _max = e.Axis == Axis.Row ? CellAddress.MaxRows : CellAddress.MaxColumns;
 
         public override Node Ref(RefNode r, ref bool changed)
         {
+            if (!applies(r.Sheet)) return r;
             int x = e.Axis == Axis.Row ? r.Row : r.Col;
             if (!StructuralShift.TryShiftIndex(x, e, _max, out int nx)) { changed = true; return new ErrorNode(RefError); }
             if (nx == x) return r;
@@ -96,6 +116,7 @@ internal static class ReferenceRewriter
 
         public override Node Range(RangeNode rg, ref bool changed)
         {
+            if (!applies(rg.Sheet)) return rg;
             RefNode a = rg.First, b = rg.Second;
             // Normalize, remembering which written corner supplied each component (ties: the first corner).
             RefNode rowLo = b.Row < a.Row ? b : a, rowHi = b.Row < a.Row ? a : b;
@@ -110,7 +131,27 @@ internal static class ReferenceRewriter
             changed = true;
             return new RangeNode(
                 new RefNode(nr0, nc0, rowLo.RowAbs, colLo.ColAbs),
-                new RefNode(nr1, nc1, rowHi.RowAbs, colHi.ColAbs));
+                new RefNode(nr1, nc1, rowHi.RowAbs, colHi.ColAbs),
+                rg.Sheet);
+        }
+    }
+
+    private sealed class RenameMap(string oldName, string? newName) : RefMap
+    {
+        private bool Matches(string? sheet) => sheet is not null && sheet.Equals(oldName, StringComparison.OrdinalIgnoreCase);
+
+        public override Node Ref(RefNode r, ref bool changed)
+        {
+            if (!Matches(r.Sheet)) return r;
+            changed = true;
+            return newName is null ? new ErrorNode(RefError) : r with { Sheet = newName };
+        }
+
+        public override Node Range(RangeNode rg, ref bool changed)
+        {
+            if (!Matches(rg.Sheet)) return rg;
+            changed = true;
+            return newName is null ? new ErrorNode(RefError) : rg with { Sheet = newName };
         }
     }
 

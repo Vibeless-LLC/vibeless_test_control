@@ -20,7 +20,17 @@ internal static class Tokenizer
             if (c == ' ' || c == '\t') { i++; continue; }
             int start = i;
 
-            if (IsDigit(c) || (c == '.' && i + 1 < n && IsDigit(s[i + 1])))
+            if (SheetNames.TryParsePrefix(s.AsSpan(), i, out string sheet, out int afterBang))
+            {
+                // CR1.2: a prefix must be immediately followed by a cell reference (no whitespace, never a name or call).
+                i = afterBang;
+                if (i >= n || !(s[i] == '$' || IsLetter(s[i])) || !TryScanWord(s, ref i, out _)) return false;
+                string refText = s[afterBang..i];
+                if ((i < n && s[i] == '(') || !CellAddress.TryParse(refText, out _)) return false;
+                tokens.Add(new Token(TokenKind.SheetPrefix, sheet, start));
+                tokens.Add(new Token(TokenKind.CellRef, refText, afterBang));
+            }
+            else if (IsDigit(c) || (c == '.' && i + 1 < n && IsDigit(s[i + 1])))
             {
                 i = ScanNumber(s, i);
                 tokens.Add(new Token(TokenKind.Number, s[start..i], start));
