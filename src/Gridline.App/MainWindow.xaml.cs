@@ -1,6 +1,8 @@
 using System.IO;
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Input;
+using Gridline.Core.Addressing;
 using Microsoft.Win32;
 
 namespace Gridline.App;
@@ -9,6 +11,7 @@ public partial class MainWindow : Window
 {
     private const string FileFilter = "Gridline files (*.gridline)|*.gridline|All files (*.*)|*.*";
     private readonly DocumentSession _session;
+    private readonly SheetController _controller;
 
     public MainWindow() : this(new DocumentSession()) { }
 
@@ -16,19 +19,40 @@ public partial class MainWindow : Window
     {
         _session = session;
         InitializeComponent();
-        _session.StateChanged += (_, _) => OnSessionStateChanged();
-        Title = _session.Title;
+        _controller = new SheetController(Sheet.Selection) { Workbook = _session.Workbook };
         Sheet.Workbook = _session.Workbook;
-        Sheet.ViewportChanged += (_, _) => SyncScrollBars();
+        Title = _session.Title;
+        _session.StateChanged += (_, _) => OnSessionStateChanged();
+
+        Sheet.ViewportChanged += (_, _) => OnViewportChanged();
+        Sheet.Selection.Changed += (_, _) => RefreshBars();
+        Sheet.EditRequested += (_, initial) => BeginEdit(initial);
+        Sheet.ClearRequested += (_, _) => _controller.ClearSelection();
         VScroll.ValueChanged += (_, e) => Sheet.TopRow = (int)Math.Round(e.NewValue);
         HScroll.ValueChanged += (_, e) => Sheet.LeftCol = (int)Math.Round(e.NewValue);
         Loaded += (_, _) => Sheet.Focus();
+        RefreshBars();
     }
 
     private void OnSessionStateChanged()
     {
         Title = _session.Title;
-        Sheet.Workbook = _session.Workbook;
+        if (!ReferenceEquals(Sheet.Workbook, _session.Workbook))
+        {
+            _controller.Workbook = _session.Workbook; // cancels any in-cell edit
+            HideEditor();
+            Sheet.Workbook = _session.Workbook;
+            Sheet.Selection.MoveTo(new CellAddress(1, 1), extend: false);
+            Sheet.TopRow = 1;
+            Sheet.LeftCol = 1;
+        }
+        RefreshBars();
+    }
+
+    private void OnViewportChanged()
+    {
+        SyncScrollBars();
+        if (_controller.IsEditing) PositionEditor();
     }
 
     /// <summary>Scrollbar ranges follow §11.3: vertical 1..100000 → TopRow, horizontal 1..702 → LeftCol.</summary>
@@ -42,6 +66,112 @@ public partial class MainWindow : Window
         HScroll.Value = Sheet.LeftCol;
     }
 
+    /// <summary>Name box, formula bar and status bar follow the selection and workbook (§11.4, §11.7); a focused box is left alone.</summary>
+    private void RefreshBars()
+    {
+        if (!NameBox.IsKeyboardFocusWithin) NameBox.Text = Sheet.Selection.Active.ToString();
+        if (!FormulaBar.IsKeyboardFocusWithin)
+            FormulaBar.Text = _controller.IsEditing ? CellEditor.Text : _controller.ActiveInput;
+        SelectionValue.Text = _controller.ActiveValueText;
+        SelectionSum.Text = _controller.SelectionSumText;
+        MenuUndo.IsEnabled = _session.Workbook.CanUndo;
+        MenuRedo.IsEnabled = _session.Workbook.CanRedo;
+    }
+
+    // ---- In-cell editor (§11.4) ----
+
+    private void BeginEdit(string? initial)
+    {
+        if (_controller.IsEditing) return;
+        Sheet.ScrollIntoView(Sheet.Selection.Active);
+        string text = _controller.BeginEdit(initial);
+        PositionEditor();
+        CellEditor.Text = text;
+        CellEditor.IsUndoEnabled = false; // start each edit with an empty text-undo stack
+        CellEditor.IsUndoEnabled = true;
+        CellEditor.Visibility = Visibility.Visible;
+        CellEditor.Focus();
+        CellEditor.CaretIndex = text.Length;
+    }
+
+    private void EndEdit(bool commit, int dRow = 0, int dCol = 0)
+    {
+        if (!_controller.IsEditing) return;
+        if (commit) _controller.CommitEdit(CellEditor.Text, dRow, dCol);
+        else _controller.CancelEdit();
+        HideEditor();
+        RefreshBars();
+    }
+
+    private void HideEditor()
+    {
+        if (CellEditor.IsKeyboardFocusWithin) Sheet.Focus();
+        CellEditor.Visibility = Visibility.Collapsed;
+    }
+
+    private void PositionEditor()
+    {
+        var r = Sheet.GetCellRect(_controller.EditAddress);
+        Canvas.SetLeft(CellEditor, r.X - GridControl.RowHeaderWidth);
+        Canvas.SetTop(CellEditor, r.Y - GridControl.HeaderHeight);
+    }
+
+    private void OnEditorKeyDown(object sender, KeyEventArgs e)
+    {
+        var action = GridKeyMap.MapEditorKey(e.Key == Key.System ? e.SystemKey : e.Key, Keyboard.Modifiers);
+        if (action.Command == EditorKeyCommand.None) return;
+        EndEdit(action.Command == EditorKeyCommand.Commit, action.DRow, action.DCol);
+        e.Handled = true;
+    }
+
+    /// <summary>Losing focus inside the window (e.g. clicking another cell) commits; window deactivation keeps the edit open.</summary>
+    private void OnEditorLostFocus(object sender, KeyboardFocusChangedEventArgs e)
+    {
+        if (e.NewFocus is not null) EndEdit(commit: true);
+    }
+
+    private void OnEditorTextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (_controller.IsEditing && !FormulaBar.IsKeyboardFocusWithin) FormulaBar.Text = CellEditor.Text;
+    }
+
+    // ---- Name box and formula bar (§11.4) ----
+
+    private void OnNameBoxKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Enter) _controller.TryNavigate(NameBox.Text); // the selection change scrolls into view
+        else if (e.Key != Key.Escape) return;
+        e.Handled = true;
+        Sheet.Focus(); // the box reverts/refreshes on focus loss
+    }
+
+    private void OnNameBoxLostFocus(object sender, KeyboardFocusChangedEventArgs e) =>
+        NameBox.Text = Sheet.Selection.Active.ToString();
+
+    private void OnFormulaBarKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Enter) _controller.CommitInput(FormulaBar.Text);
+        else if (e.Key != Key.Escape) return;
+        e.Handled = true;
+        Sheet.Focus();
+    }
+
+    /// <summary>Uncommitted formula bar text is discarded when focus leaves without Enter.</summary>
+    private void OnFormulaBarLostFocus(object sender, KeyboardFocusChangedEventArgs e) => RefreshBars();
+
+    /// <summary>
+    /// Opening a menu takes focus from the in-cell editor (which commits and collapses); WPF then tries to give focus
+    /// back to the collapsed editor and fails. Once the menu has closed, return focus to the grid unless a visible
+    /// text box (name box, formula bar) has it.
+    /// </summary>
+    private void OnSubmenuClosed(object sender, RoutedEventArgs e) =>
+        Dispatcher.BeginInvoke(() =>
+        {
+            if (Keyboard.FocusedElement is not TextBox { IsVisible: true } && !Sheet.IsKeyboardFocused) Sheet.Focus();
+        }, System.Windows.Threading.DispatcherPriority.Input);
+
+    // ---- Commands ----
+
     private void OnNew(object s, ExecutedRoutedEventArgs e) => _session.New();
 
     private void OnOpen(object s, ExecutedRoutedEventArgs e)
@@ -53,19 +183,34 @@ public partial class MainWindow : Window
 
     private void OnSave(object s, ExecutedRoutedEventArgs e)
     {
+        EndEdit(commit: true);
         if (_session.FilePath is null) OnSaveAs(s, e);
         else Report(_session.TrySave(out var err), err);
     }
 
     private void OnSaveAs(object s, ExecutedRoutedEventArgs e)
     {
+        EndEdit(commit: true);
         var dlg = new SaveFileDialog { Filter = FileFilter, DefaultExt = ".gridline" };
         if (dlg.ShowDialog(this) != true) return;
         Report(_session.TrySaveAs(dlg.FileName, out var err), err);
     }
 
-    private void OnUndo(object s, ExecutedRoutedEventArgs e) => _session.Workbook.Undo();
-    private void OnRedo(object s, ExecutedRoutedEventArgs e) => _session.Workbook.Redo();
+    // Ctrl+Z/Ctrl+Y reach the window's Undo/Redo bindings only when the grid (not a TextBox) has focus: a focused
+    // TextBox handles them as text undo (DECISIONS.md). The menu items call the workbook directly, so their action and
+    // enabled state never depend on which element has focus.
+    private void OnUndo(object s, ExecutedRoutedEventArgs e) => UndoRedo(undo: true);
+    private void OnRedo(object s, ExecutedRoutedEventArgs e) => UndoRedo(undo: false);
+    private void OnUndoClick(object s, RoutedEventArgs e) => UndoRedo(undo: true);
+    private void OnRedoClick(object s, RoutedEventArgs e) => UndoRedo(undo: false);
+
+    private void UndoRedo(bool undo)
+    {
+        EndEdit(commit: false);
+        if (undo) _session.Workbook.Undo();
+        else _session.Workbook.Redo();
+    }
+
     private void CanUndo(object s, CanExecuteRoutedEventArgs e) => e.CanExecute = _session.Workbook.CanUndo;
     private void CanRedo(object s, CanExecuteRoutedEventArgs e) => e.CanExecute = _session.Workbook.CanRedo;
     private void OnExit(object s, ExecutedRoutedEventArgs e) => Close();

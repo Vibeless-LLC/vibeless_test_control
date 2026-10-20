@@ -7,6 +7,9 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>Gridline.App</RootNamespace>
     <AssemblyName>Gridline.App</AssemblyName>
+    <!-- WPF text input needs culture data: in invariant mode a focused TextBox throws CultureNotFoundException
+         (InputLanguageSource -> new CultureInfo(LCID)). The code still formats with InvariantCulture explicitly. -->
+    <InvariantGlobalization>false</InvariantGlobalization>
   </PropertyGroup>
 
   <ItemGroup>

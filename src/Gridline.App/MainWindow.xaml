@@ -16,7 +16,7 @@
         <KeyBinding Key="S" Modifiers="Ctrl+Shift" Command="SaveAs" />
     </Window.InputBindings>
     <DockPanel>
-        <Menu DockPanel.Dock="Top">
+        <Menu DockPanel.Dock="Top" MenuItem.SubmenuClosed="OnSubmenuClosed">
             <MenuItem Header="_File" AutomationProperties.AutomationId="MenuFile">
                 <MenuItem Header="_New" Command="New" InputGestureText="Ctrl+N" />
                 <MenuItem Header="_Open..." Command="Open" InputGestureText="Ctrl+O"
@@ -28,9 +28,9 @@
                 <MenuItem Header="E_xit" Command="Close" />
             </MenuItem>
             <MenuItem Header="_Edit" AutomationProperties.AutomationId="MenuEdit">
-                <MenuItem Header="_Undo" Command="Undo" InputGestureText="Ctrl+Z"
+                <MenuItem x:Name="MenuUndo" Header="_Undo" Click="OnUndoClick" InputGestureText="Ctrl+Z" IsEnabled="False"
                           AutomationProperties.AutomationId="MenuUndo" />
-                <MenuItem Header="_Redo" Command="Redo" InputGestureText="Ctrl+Y"
+                <MenuItem x:Name="MenuRedo" Header="_Redo" Click="OnRedoClick" InputGestureText="Ctrl+Y" IsEnabled="False"
                           AutomationProperties.AutomationId="MenuRedo" />
                 <Separator />
                 <MenuItem Header="_Copy" Command="Copy" InputGestureText="Ctrl+C" />
@@ -43,9 +43,11 @@
                 <ColumnDefinition Width="*" />
             </Grid.ColumnDefinitions>
             <TextBox x:Name="NameBox" Grid.Column="0" Width="100"
-                     AutomationProperties.AutomationId="NameBox" />
-            <TextBox x:Name="FormulaBar" Grid.Column="1"
-                     AutomationProperties.AutomationId="FormulaBar" />
+                     AutomationProperties.AutomationId="NameBox"
+                     PreviewKeyDown="OnNameBoxKeyDown" LostKeyboardFocus="OnNameBoxLostFocus" />
+            <TextBox x:Name="FormulaBar" Grid.Column="1" MaxLength="32767"
+                     AutomationProperties.AutomationId="FormulaBar"
+                     PreviewKeyDown="OnFormulaBarKeyDown" LostKeyboardFocus="OnFormulaBarLostFocus" />
         </Grid>
         <StatusBar DockPanel.Dock="Bottom">
             <StatusBarItem>
@@ -65,6 +67,16 @@
                 <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
             <local:GridControl x:Name="Sheet" AutomationProperties.AutomationId="Grid" />
+            <!-- In-cell editor overlay: offset by the header sizes and clipped to the cell area; a null
+                 Canvas background lets clicks fall through to the grid. -->
+            <Canvas x:Name="EditorLayer" Margin="56,22,0,0" ClipToBounds="True">
+                <TextBox x:Name="CellEditor" Visibility="Collapsed" MaxLength="32767"
+                         Width="80" Height="22" Padding="1,0" BorderThickness="2" BorderBrush="#217346"
+                         FontFamily="Segoe UI" FontSize="12" VerticalContentAlignment="Center"
+                         AutomationProperties.AutomationId="CellEditor"
+                         PreviewKeyDown="OnEditorKeyDown" LostKeyboardFocus="OnEditorLostFocus"
+                         TextChanged="OnEditorTextChanged" />
+            </Canvas>
             <ScrollBar x:Name="VScroll" Grid.Column="1" Orientation="Vertical"
                        Minimum="1" Maximum="100000" SmallChange="1" Value="1" />
             <ScrollBar x:Name="HScroll" Grid.Row="1" Orientation="Horizontal"

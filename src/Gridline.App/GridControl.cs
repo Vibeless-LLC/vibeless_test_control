@@ -42,7 +42,11 @@ public sealed class GridControl : FrameworkElement
         Focusable = true;
         FocusVisualStyle = null;
         ClipToBounds = true;
-        Selection.Changed += (_, _) => InvalidateVisual();
+        Selection.Changed += (_, _) =>
+        {
+            ScrollIntoView(Selection.Active);
+            InvalidateVisual();
+        };
     }
 
     /// <summary>The workbook shown; the control re-renders on its <see cref="Workbook.CellsChanged"/>.</summary>
@@ -80,6 +84,12 @@ public sealed class GridControl : FrameworkElement
 
     /// <summary>Columns that fit entirely in the viewport (at least 1).</summary>
     public int VisibleColumnCount => Math.Max(1, (int)Math.Floor((ActualWidth - RowHeaderWidth) / ColumnWidth));
+
+    /// <summary>Asks the host to start an in-cell edit; the argument is the initial text, or null for the existing input (F2).</summary>
+    public event EventHandler<string?>? EditRequested;
+
+    /// <summary>Asks the host to clear the selection (Delete).</summary>
+    public event EventHandler? ClearRequested;
 
     /// <summary>Raised when <see cref="TopRow"/>, <see cref="LeftCol"/> or the viewport size changes.</summary>
     public event EventHandler? ViewportChanged;
@@ -250,6 +260,40 @@ public sealed class GridControl : FrameworkElement
             TextAlignment = align,
         };
         dc.DrawText(ft, new Point(cell.X + CellPadding, cell.Y + (cell.Height - ft.Height) / 2));
+    }
+
+    protected override void OnKeyDown(KeyEventArgs e)
+    {
+        base.OnKeyDown(e);
+        var key = e.Key == Key.System ? e.SystemKey : e.Key;
+        var action = GridKeyMap.MapGridKey(key, Keyboard.Modifiers);
+        switch (action.Command)
+        {
+            case GridKeyCommand.Move:
+                Selection.MoveBy(action.DRow, action.DCol, action.Extend);
+                break;
+            case GridKeyCommand.Page:
+                TopRow += action.DRow * VisibleRowCount;
+                Selection.MoveBy(action.DRow * VisibleRowCount, 0, action.Extend);
+                break;
+            case GridKeyCommand.EditExisting:
+                EditRequested?.Invoke(this, null);
+                break;
+            case GridKeyCommand.Clear:
+                ClearRequested?.Invoke(this, EventArgs.Empty);
+                break;
+            default:
+                return;
+        }
+        e.Handled = true;
+    }
+
+    protected override void OnTextInput(TextCompositionEventArgs e)
+    {
+        base.OnTextInput(e);
+        if (e.Handled || !GridKeyMap.IsPrintable(e.Text)) return;
+        EditRequested?.Invoke(this, e.Text);
+        e.Handled = true;
     }
 
     protected override void OnMouseLeftButtonDown(MouseButtonEventArgs e)
