@@ -15,6 +15,12 @@ public class GridlineFileTests
         return wb;
     }
 
+    [Fact] public void Save_Names_ExactBytes() { var wb = new Workbook(); wb.DefineName("Total", "$A$1:$A$10"); wb.DefineName("Rate", "$B$1"); Assert.Equal("{\n  \"format\": \"gridline\",\n  \"version\": 1,\n  \"names\": {\n    \"Rate\": \"$B$1\",\n    \"Total\": \"$A$1:$A$10\"\n  },\n  \"cells\": []\n}\n", GridlineFile.Serialize(wb)); }
+    [Fact] public void Load_InvalidName_Throws() => Assert.Throws<GridlineFormatException>(() => GridlineFile.Load("{\"format\":\"gridline\",\"version\":1,\"names\":{\"A1\":\"$A$1\"},\"cells\":[]}"u8));
+    [Fact] public void Load_RelativeRefersTo_Throws() => Assert.Throws<GridlineFormatException>(() => GridlineFile.Load("{\"format\":\"gridline\",\"version\":1,\"names\":{\"R\":\"A1\"},\"cells\":[]}"u8));
+    [Fact] public void Names_NotObject_Throws() => Assert.Throws<GridlineFormatException>(() => GridlineFile.Load("{\"format\":\"gridline\",\"version\":1,\"names\":[],\"cells\":[]}"u8));
+    [Fact(Skip = "needs Task 3")] public void Names_RefTargetSurvivesRoundTrip() { var wb = new Workbook(); wb.DefineName("R", "$A$2"); ((dynamic)wb).DeleteRows(2, 1); var bytes = GridlineFile.SerializeToUtf8(wb); var back = GridlineFile.Load(bytes); Assert.Equal("#REF!", back.GetNames()[0].Value); Assert.Equal(bytes, GridlineFile.SerializeToUtf8(back)); }
+    [Fact] public void Names_OneByOneRangeSurvivesRoundTrip() { var wb = new Workbook(); wb.DefineName("R", "$A$1:$A$1"); var bytes = GridlineFile.SerializeToUtf8(wb); var back = GridlineFile.Load(bytes); Assert.Equal("$A$1:$A$1", back.GetNames()[0].Value); Assert.Equal(bytes, GridlineFile.SerializeToUtf8(back)); }
     [Fact] public void Save_Empty_ExactBytes() => Assert.Equal("{\n  \"format\": \"gridline\",\n  \"version\": 1,\n  \"names\": {},\n  \"cells\": []\n}\n", GridlineFile.Serialize(new Workbook()));
 
     [Fact]

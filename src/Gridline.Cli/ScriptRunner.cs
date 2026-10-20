@@ -122,8 +122,28 @@ internal sealed class ScriptRunner
                 if (rest.Length == 0) { Err("LOAD requires a path"); break; }
                 _wb = GridlineFile.LoadFromPath(rest);
                 break;
+            case "NAME":
+            {
+                var parts = rest.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                if (parts.Length != 2) { Err("usage: NAME <name> <refersTo>"); break; }
+                _wb.DefineName(parts[0], parts[1]);
+                break;
+            }
+            case "UNNAME":
+            {
+                var parts = rest.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                if (parts.Length != 1) { Err("usage: UNNAME <name>"); break; }
+                _wb.DeleteName(parts[0]);
+                break;
+            }
+            case "NAMES":
+            {
+                var sb = new StringBuilder();
+                foreach (var n in _wb.GetNames()) sb.Append("NAME\t").Append(n.Key).Append('\t').Append(n.Value).Append('\n');
+                _out.Write(sb.ToString());
+                break;
+            }
             case "INSERTROWS": case "DELETEROWS": case "INSERTCOLS": case "DELETECOLS":
-            case "NAME": case "UNNAME": case "NAMES":
                 Err("not implemented");
                 break;
             default:
