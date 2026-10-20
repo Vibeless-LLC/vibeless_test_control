@@ -49,12 +49,9 @@ public class CopyPasteTests
         var wb = new Workbook();
         wb.SetCell("A1", "1"); wb.SetCell("B1", "=a1+1"); wb.SetCell("ZZ100000", "end");
         long before = GC.GetAllocatedBytesForCurrentThread();
-        var sw = System.Diagnostics.Stopwatch.StartNew();
         wb.CopyPaste("A1:ZZ100000", "A1");
-        sw.Stop();
         long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
         Assert.True(allocated < 64L * 1024 * 1024, $"allocated {allocated}");
-        Assert.True(sw.ElapsedMilliseconds < 2000, $"took {sw.ElapsedMilliseconds} ms");
         Assert.Equal("=A1+1", wb.GetInput("B1"));
         Assert.Equal("end", wb.GetInput("ZZ100000"));
     }
@@ -70,5 +67,22 @@ public class CopyPasteTests
         wb.Undo();
         Assert.Equal("old", wb.GetInput("B9"));
         Assert.Equal("old2", wb.GetInput("B100000"));
+    }
+}
+
+/// <summary>Timed paste check, serial in the Perf collection so it never overlaps other perf runs (§9.4, §12).</summary>
+[Collection(Gridline.Tests.Shared.PerfCollection.Name)]
+[Trait("Category", "Perf")]
+public class CopyPastePerfTests
+{
+    [Fact]
+    public void Paste_WholeGridSource_Under2s()
+    {
+        var wb = new Workbook();
+        wb.SetCell("A1", "1"); wb.SetCell("B1", "=a1+1"); wb.SetCell("ZZ100000", "end");
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        wb.CopyPaste("A1:ZZ100000", "A1");
+        sw.Stop();
+        Assert.True(sw.ElapsedMilliseconds < 2000, $"took {sw.ElapsedMilliseconds} ms");
     }
 }

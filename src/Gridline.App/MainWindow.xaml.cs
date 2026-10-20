@@ -230,7 +230,16 @@ public partial class MainWindow : Window
 
     private void OnFormulaBarKeyDown(object sender, KeyEventArgs e)
     {
-        if (e.Key == Key.Enter) _controller.CommitInput(FormulaBar.Text);
+        if (e.Key == Key.Enter)
+        {
+            if (!_controller.TryCommitInput(FormulaBar.Text, out var error))
+            {
+                // Rejected input (e.g. over 32,767 chars): keep the text and focus so nothing is lost (§9.3).
+                e.Handled = true;
+                MessageBox.Show(this, error, "Gridline", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+        }
         else if (e.Key != Key.Escape) return;
         e.Handled = true;
         Sheet.Focus();

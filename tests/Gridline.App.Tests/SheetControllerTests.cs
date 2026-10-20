@@ -238,6 +238,19 @@ public class SheetControllerTests
     }
 
     [Fact]
+    public void TryCommitInput_Overlong_ReportsErrorAndChangesNothing()
+    {
+        var (c, w) = Make();
+        Assert.False(c.TryCommitInput(new string('a', Workbook.MaxInputLength + 1), out var error));
+        Assert.False(string.IsNullOrEmpty(error));
+        Assert.Equal("", w.GetInput("A1"));
+        Assert.False(w.CanUndo);
+        Assert.True(c.TryCommitInput("ok", out error));
+        Assert.Null(error);
+        Assert.Equal("ok", w.GetInput("A1"));
+    }
+
+    [Fact]
     public void CommitEdit_Throwing_KeepsEditOpen()
     {
         var (c, w) = Make();

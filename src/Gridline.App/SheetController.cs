@@ -67,6 +67,16 @@ public sealed class SheetController
     /// <summary>Formula bar commit: sets the active cell's input (one step).</summary>
     public void CommitInput(string text) => _workbook?.SetCell(Selection.Active.ToString(), text);
 
+    /// <summary>
+    /// Formula bar commit that reports rejected input (e.g. longer than <see cref="Workbook.MaxInputLength"/>)
+    /// instead of throwing; nothing is applied on failure.
+    /// </summary>
+    public bool TryCommitInput(string text, out string? error)
+    {
+        try { CommitInput(text); error = null; return true; }
+        catch (ArgumentException ex) { error = ex.Message; return false; }
+    }
+
     /// <summary>Name box navigation: a single cell address ([$]COL[$]ROW, any case, surrounding spaces ignored).</summary>
     public bool TryNavigate(string text)
     {
