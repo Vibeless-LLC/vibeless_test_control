@@ -6,17 +6,22 @@ namespace Gridline.Core.Tests.Dependencies;
 
 public class DependencyGraphTests
 {
-    private static int K(string a) => CellAddress.Parse(a).Key;
+    // Single-sheet graph tests: every key is on sheet 0 and every reference is unqualified.
+    private static long K(string a) => GlobalKey.Of(0, CellAddress.Parse(a).Key);
     private static RangeAddress R(string r) => RangeAddress.Parse(r);
 
-    private static FormulaDeps Cells(params string[] cells) => new(cells.Select(K).ToArray(), [], []);
-    private static FormulaDeps Ranges(params string[] ranges) => new([], ranges.Select(R).ToArray(), []);
-    private static FormulaDeps Names(params string[] names) => new([], [], names);
+    /// <summary>Unqualified deps from sheet-0 global keys (or plain cell keys).</summary>
+    internal static FormulaDeps D(IEnumerable<long> cells, IEnumerable<RangeAddress> ranges, IReadOnlyList<string> names) =>
+        new(cells.Select(c => new SheetCell(null, GlobalKey.Cell(c))).ToArray(), ranges.Select(r => new SheetRange(null, r)).ToArray(), names);
 
-    private static RecalcPlan Plan(DependencyGraph g, IEnumerable<string> changed, IEnumerable<string>? names = null, Func<int, bool>? isFormula = null)
-        => new RecalcPlanner(g).Plan(changed.Select(K), names ?? [], isFormula ?? (_ => false));
+    private static FormulaDeps Cells(params string[] cells) => D(cells.Select(K), [], []);
+    private static FormulaDeps Ranges(params string[] ranges) => D([], ranges.Select(R), []);
+    private static FormulaDeps Names(params string[] names) => D([], [], names);
 
-    private static int[] Keys(params string[] cells) => cells.Select(K).ToArray();
+    private static RecalcPlan Plan(DependencyGraph g, IEnumerable<string> changed, IEnumerable<string>? names = null, Func<long, bool>? isFormula = null)
+        => new RecalcPlanner(g).Plan(changed.Select(K), names ?? [], [], isFormula ?? (_ => false));
+
+    private static long[] Keys(params string[] cells) => cells.Select(K).ToArray();
 
     [Fact]
     public void Chain_TopologicalOrder()
@@ -44,7 +49,7 @@ public class DependencyGraphTests
         var g = new DependencyGraph();
         g.SetDependencies(K("A1"), Cells("A1"));
         var p = Plan(g, ["A1"], isFormula: k => k == K("A1"));
-        Assert.Equal(new HashSet<int>(Keys("A1")), p.CycleMembers);
+        Assert.Equal(new HashSet<long>(Keys("A1")), p.CycleMembers);
         Assert.Equal(Keys("A1"), p.Order);
     }
 
@@ -55,9 +60,9 @@ public class DependencyGraphTests
         g.SetDependencies(K("A1"), Cells("B1"));
         g.SetDependencies(K("B1"), Cells("A1"));
         g.SetDependencies(K("C1"), Cells("A1"));
-        var formulas = new HashSet<int>(Keys("A1", "B1", "C1"));
+        var formulas = new HashSet<long>(Keys("A1", "B1", "C1"));
         var p = Plan(g, ["A1"], isFormula: formulas.Contains);
-        Assert.Equal(new HashSet<int>(Keys("A1", "B1")), p.CycleMembers);
+        Assert.Equal(new HashSet<long>(Keys("A1", "B1")), p.CycleMembers);
         Assert.Equal(3, p.Order.Count);
         int c = p.Order.ToList().IndexOf(K("C1"));
         Assert.True(c > p.Order.ToList().IndexOf(K("A1")));
@@ -80,7 +85,7 @@ public class DependencyGraphTests
     {
         var g = new DependencyGraph();
         for (int r = 2; r <= 100_000; r++)
-            g.SetDependencies(new CellAddress(r, 1).Key, new FormulaDeps([new CellAddress(r - 1, 1).Key], [], []));
+            g.SetDependencies(new CellAddress(r, 1).Key, D([new CellAddress(r - 1, 1).Key], [], []));
         var p = Plan(g, ["A1"]);
         Assert.Equal(99_999, p.Order.Count);
         Assert.Equal(K("A2"), p.Order[0]);
@@ -96,13 +101,13 @@ public class DependencyGraphTests
         var g = new DependencyGraph();
         for (int n = 2; n <= last; n++)
             g.SetDependencies(new CellAddress(n, 1).Key,
-                new FormulaDeps([], [new RangeAddress(new CellAddress(1, 1), new CellAddress(n - 1, 1))], []));
+                D([], [new RangeAddress(new CellAddress(1, 1), new CellAddress(n - 1, 1))], []));
         var sw = Stopwatch.StartNew();
         var p = Plan(g, ["A1"]);
         sw.Stop();
         Assert.Equal(last - 1, p.Order.Count);
         if (budget is { } b) Assert.True(sw.Elapsed < b, $"took {sw.Elapsed}");
-        var pos = new Dictionary<int, int>();
+        var pos = new Dictionary<long, int>();
         for (int i = 0; i < p.Order.Count; i++) pos[p.Order[i]] = i;
         for (int n = 3; n <= last; n++)
             Assert.True(pos[new CellAddress(n - 1, 1).Key] < pos[new CellAddress(n, 1).Key]);
@@ -116,7 +121,7 @@ public class DependencyGraphTests
         var g = new DependencyGraph();
         g.SetDependencies(K("B1"), Cells("A1"));
         g.SetDependencies(K("C1"), Cells("A1"));
-        g.SetDependencies(K("D1"), new FormulaDeps(Keys("B1", "C1"), [R("A1:A1")], []));
+        g.SetDependencies(K("D1"), D(Keys("B1", "C1"), [R("A1:A1")], []));
         var p = Plan(g, ["A1"]);
         Assert.Equal(3, p.Order.Count);
         Assert.Equal(3, p.Order.Distinct().Count());
@@ -137,7 +142,7 @@ public class DependencyGraphTests
     public void SetDependencies_ReplaceAndRemove()
     {
         var g = new DependencyGraph();
-        g.SetDependencies(K("C1"), new FormulaDeps(Keys("A1"), [R("E1:E5")], ["X"]));
+        g.SetDependencies(K("C1"), D(Keys("A1"), [R("E1:E5")], ["X"]));
         g.SetDependencies(K("C1"), Cells("B1"));
         Assert.Empty(g.DirectDependents(K("A1")));
         Assert.Empty(g.DirectDependents(K("E3")));
@@ -178,7 +183,7 @@ public class DependencyGraphTests
         // Unnormalized constructor input must be handled too.
         var parsed = R(range);
         var raw = range == "C3:A1" ? new RangeAddress(CellAddress.Parse("C3"), CellAddress.Parse("A1")) : parsed;
-        g.SetDependencies(K("ZY1"), new FormulaDeps([], [raw], []));
+        g.SetDependencies(K("ZY1"), D([], [raw], []));
         Assert.Equal(expected, g.DirectDependents(K(cell)).Contains(K("ZY1")));
     }
 
@@ -208,9 +213,9 @@ public class DependencyGraphTests
         g.SetDependencies(K("A1"), Ranges("B1:B2"));   // A1 -> uses B1 via range
         g.SetDependencies(K("B1"), Names("N"));        // B1 uses itself via name
         g.SetDependencies(K("B2"), Cells("A1"));       // B2 uses A1; A1 uses B2 via range
-        var formulas = new HashSet<int>(Keys("A1", "B1", "B2"));
+        var formulas = new HashSet<long>(Keys("A1", "B1", "B2"));
         var p = new RecalcPlanner(g).PlanAll(formulas);
-        Assert.Equal(new HashSet<int>(Keys("A1", "B1", "B2")), p.CycleMembers);
+        Assert.Equal(new HashSet<long>(Keys("A1", "B1", "B2")), p.CycleMembers);
         Assert.Equal(3, p.Order.Count);
     }
 
@@ -231,11 +236,11 @@ public class DependencyGraphTests
     public void PlanAll_LongChain_NoStackOverflow()
     {
         var g = new DependencyGraph();
-        var all = new List<int>();
+        var all = new List<long>();
         for (int r = 100_000; r >= 2; r--)
         {
-            int k = new CellAddress(r, 1).Key;
-            g.SetDependencies(k, new FormulaDeps([new CellAddress(r - 1, 1).Key], [], []));
+            long k = new CellAddress(r, 1).Key;
+            g.SetDependencies(k, D([new CellAddress(r - 1, 1).Key], [], []));
             all.Add(k);
         }
         var p = new RecalcPlanner(g).PlanAll(all);
@@ -249,7 +254,7 @@ public class DependencyGraphTests
         var g = new DependencyGraph();
         const int n = 50_000;
         for (int r = 1; r <= n; r++)
-            g.SetDependencies(new CellAddress(r, 1).Key, new FormulaDeps([new CellAddress(r == 1 ? n : r - 1, 1).Key], [], []));
+            g.SetDependencies(new CellAddress(r, 1).Key, D([new CellAddress(r == 1 ? n : r - 1, 1).Key], [], []));
         var p = Plan(g, ["A1"], isFormula: _ => true);
         Assert.Equal(n, p.CycleMembers.Count);
         Assert.Equal(n, p.Order.Count);
@@ -263,7 +268,7 @@ public class DependencyGraphTests
         return g;
     }
 
-    internal static int[] ColumnAKeys() => Enumerable.Range(1, 100_000).Select(r => new CellAddress(r, 1).Key).ToArray();
+    internal static long[] ColumnAKeys() => Enumerable.Range(1, 100_000).Select(r => (long)new CellAddress(r, 1).Key).ToArray();
 
     [Fact]
     public void BulkChange_SharedRanges_EachDependentOnce()
@@ -271,7 +276,7 @@ public class DependencyGraphTests
         var g = SharedFullColumnGraph();
         var keys = ColumnAKeys();
         long before = GC.GetAllocatedBytesForCurrentThread();
-        var p = new RecalcPlanner(g).Plan(keys, [], _ => false);
+        var p = new RecalcPlanner(g).Plan(keys, [], [], _ => false);
         long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
         // O(changed + affected), not O(changed x fan-in) (~10^8 roots, ~400 MB+).
         Assert.True(allocated < 32L * 1024 * 1024, $"allocated {allocated:N0} bytes");
@@ -285,13 +290,13 @@ public class DependencyGraphTests
     {
         var g = new DependencyGraph();
         g.SetNameTarget("N", R("A1:A3"));
-        g.SetDependencies(K("C1"), new FormulaDeps(Keys("A1", "A2"), [R("A1:A5")], ["N"]));
+        g.SetDependencies(K("C1"), D(Keys("A1", "A2"), [R("A1:A5")], ["N"]));
         g.SetDependencies(K("C2"), Names("N"));
         g.SetDependencies(K("C3"), Ranges("A4:A9"));
         g.SetDependencies(K("C4"), Cells("Z1"));
         var got = g.DistinctDirectDependentsOfMany(Keys("A1", "A2", "A3", "A4", "A1")).ToList();
         Assert.Equal(got.Count, got.Distinct().Count());
-        Assert.Equal(new HashSet<int>(Keys("C1", "C2", "C3")), got.ToHashSet());
+        Assert.Equal(new HashSet<long>(Keys("C1", "C2", "C3")), got.ToHashSet());
     }
 
     [Fact]
@@ -299,7 +304,7 @@ public class DependencyGraphTests
     {
         var g = new DependencyGraph();
         g.SetDependencies(K("B1"), Cells("A1"));
-        var p = new RecalcPlanner(g).Plan(Keys("A1", "A1", "B1", "B1"), ["X", "X"], k => k == K("B1"));
+        var p = new RecalcPlanner(g).Plan(Keys("A1", "A1", "B1", "B1"), ["X", "X"], [], k => k == K("B1"));
         Assert.Equal(Keys("B1"), p.Order);
     }
 
@@ -312,6 +317,13 @@ public class DependencyGraphTests
         Assert.Empty(p.Order);
         Assert.Empty(p.CycleMembers);
     }
+}
+
+/// <summary>Single-sheet shorthands for the sheet-aware graph API (sheet 0, no qualified refs).</summary>
+internal static class SingleSheetGraph
+{
+    public static void SetDependencies(this DependencyGraph g, long key, FormulaDeps? deps) => g.SetDependencies(key, deps, _ => null);
+    public static void SetNameTarget(this DependencyGraph g, string upperName, RangeAddress? target) => g.SetNameTarget(upperName, 0, target);
 }
 
 /// <summary>Timed dependency-graph tests: in the serial Perf collection so they never overlap other perf runs.</summary>
@@ -328,9 +340,9 @@ public class DependencyGraphPerfTests
         var g = DependencyGraphTests.SharedFullColumnGraph();
         var keys = DependencyGraphTests.ColumnAKeys();
         var planner = new RecalcPlanner(g);
-        planner.Plan(keys, [], _ => false); // warm-up
+        planner.Plan(keys, [], [], _ => false); // warm-up
         var sw = Stopwatch.StartNew();
-        var p = planner.Plan(keys, [], _ => false);
+        var p = planner.Plan(keys, [], [], _ => false);
         sw.Stop();
         Assert.Equal(1000, p.Order.Count);
         Assert.True(sw.Elapsed < TimeSpan.FromSeconds(2), $"took {sw.Elapsed}");

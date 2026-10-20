@@ -4,7 +4,7 @@ namespace Gridline.Core.Dependencies;
 /// Formula cells to evaluate, each once, precedents before dependents (§6.7). Cycle members are included
 /// where their strongly connected component falls and are also listed in <see cref="CycleMembers"/>.
 /// </summary>
-internal sealed record RecalcPlan(IReadOnlyList<int> Order, IReadOnlySet<int> CycleMembers);
+internal sealed record RecalcPlan(IReadOnlyList<long> Order, IReadOnlySet<long> CycleMembers);
 
 /// <summary>
 /// Plans a recalculation with an iterative (explicit-stack) Tarjan SCC over <see cref="DependencyGraph.DirectDependents"/>,
@@ -14,54 +14,61 @@ internal sealed record RecalcPlan(IReadOnlyList<int> Order, IReadOnlySet<int> Cy
 /// </summary>
 internal sealed class RecalcPlanner(DependencyGraph g)
 {
-    public RecalcPlan Plan(IEnumerable<int> changedKeys, IEnumerable<string> changedNames, Func<int, bool> isFormula)
+    /// <summary>
+    /// Plans the recalc after <paramref name="changedKeys"/> (cells whose input changed) and <paramref name="changedNames"/>
+    /// (upper-cased names whose definition changed). <paramref name="extraRoots"/> are formula cells to re-evaluate
+    /// regardless (e.g. formulas rebound to a sheet that started or stopped existing, CR1.2).
+    /// </summary>
+    public RecalcPlan Plan(IEnumerable<long> changedKeys, IEnumerable<string> changedNames, IEnumerable<long> extraRoots, Func<long, bool> isFormula)
     {
         // Roots are deduplicated; non-formula changes are expanded in bulk so each shared range entry
         // or name node is visited once however many changed cells it covers.
-        var rootSet = new HashSet<int>();
-        var roots = new List<int>();
-        var nonFormula = new List<int>();
-        foreach (int k in changedKeys)
+        var rootSet = new HashSet<long>();
+        var roots = new List<long>();
+        var nonFormula = new List<long>();
+        foreach (long k in changedKeys)
         {
             if (!isFormula(k)) nonFormula.Add(k);
             else if (rootSet.Add(k)) roots.Add(k);
         }
-        foreach (int d in g.DistinctDirectDependentsOfMany(nonFormula))
+        foreach (long k in extraRoots)
+            if (rootSet.Add(k)) roots.Add(k);
+        foreach (long d in g.DistinctDirectDependentsOfMany(nonFormula))
             if (rootSet.Add(d)) roots.Add(d);
         foreach (string n in changedNames)
-            foreach (int d in g.NameDependents(n))
+            foreach (long d in g.NameDependents(n))
                 if (rootSet.Add(d)) roots.Add(d);
         return Run(roots, restrictTo: null);
     }
 
-    public RecalcPlan PlanAll(IEnumerable<int> allFormulaKeys)
+    public RecalcPlan PlanAll(IEnumerable<long> allFormulaKeys)
     {
-        var all = allFormulaKeys as IReadOnlyCollection<int> ?? allFormulaKeys.ToList();
-        var set = all as IReadOnlySet<int> ?? new HashSet<int>(all);
+        var all = allFormulaKeys as IReadOnlyCollection<long> ?? allFormulaKeys.ToList();
+        var set = all as IReadOnlySet<long> ?? new HashSet<long>(all);
         return Run(all, set);
     }
 
-    private struct Frame(int node, IEnumerator<int> edges)
+    private struct Frame(long node, IEnumerator<long> edges)
     {
-        public readonly int Node = node;
-        public readonly IEnumerator<int> Edges = edges;
+        public readonly long Node = node;
+        public readonly IEnumerator<long> Edges = edges;
     }
 
-    private RecalcPlan Run(IEnumerable<int> roots, IReadOnlySet<int>? restrictTo)
+    private RecalcPlan Run(IEnumerable<long> roots, IReadOnlySet<long>? restrictTo)
     {
         // Per-node Tarjan state, keyed by dense id.
-        var id = new Dictionary<int, int>();
+        var id = new Dictionary<long, int>();
         var index = new List<int>();
         var low = new List<int>();
         var onStack = new List<bool>();
 
-        var sccStack = new Stack<int>();       // cell keys
+        var sccStack = new Stack<long>();      // global keys
         var frames = new List<Frame>();
-        var reversed = new List<int>();        // cells in SCC emission order (reverse topological)
-        var cycles = new HashSet<int>();
-        var scc = new List<int>();
+        var reversed = new List<long>();       // cells in SCC emission order (reverse topological)
+        var cycles = new HashSet<long>();
+        var scc = new List<long>();
 
-        int Visit(int key)
+        int Visit(long key)
         {
             int i = index.Count;
             id[key] = i;
@@ -73,7 +80,7 @@ internal sealed class RecalcPlanner(DependencyGraph g)
             return i;
         }
 
-        foreach (int root in roots)
+        foreach (long root in roots)
         {
             if (id.ContainsKey(root)) continue;
             Visit(root);
@@ -83,7 +90,7 @@ internal sealed class RecalcPlanner(DependencyGraph g)
                 int v = id[f.Node];
                 if (f.Edges.MoveNext())
                 {
-                    int w = f.Edges.Current;
+                    long w = f.Edges.Current;
                     if (restrictTo is not null && !restrictTo.Contains(w)) continue;
                     if (w == f.Node) { cycles.Add(w); continue; }
                     if (!id.TryGetValue(w, out int wi)) Visit(w);
@@ -96,7 +103,7 @@ internal sealed class RecalcPlanner(DependencyGraph g)
                 if (low[v] == index[v])
                 {
                     scc.Clear();
-                    int x;
+                    long x;
                     do
                     {
                         x = sccStack.Pop();

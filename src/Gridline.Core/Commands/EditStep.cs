@@ -1,7 +1,7 @@
 namespace Gridline.Core.Commands;
 
-/// <summary>One cell's input change: <paramref name="Key"/> went from <paramref name="OldInput"/> to <paramref name="NewInput"/> (§9.3).</summary>
-internal sealed record CellEdit(int Key, string OldInput, string NewInput);
+/// <summary>One cell's input change: <paramref name="Key"/> (a <see cref="GlobalKey"/>) went from <paramref name="OldInput"/> to <paramref name="NewInput"/> (§9.3).</summary>
+internal sealed record CellEdit(long Key, string OldInput, string NewInput);
 
 /// <summary>
 /// One undo step (§9.3): the input diffs of every changed cell (inputs only, never values) and, when the step changed

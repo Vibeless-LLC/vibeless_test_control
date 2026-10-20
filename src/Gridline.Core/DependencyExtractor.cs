@@ -6,7 +6,7 @@ using Gridline.Core.Parsing;
 namespace Gridline.Core;
 
 /// <summary>
-/// Static dependencies of a parsed formula (§6.1): every cell reference, range (normalized) and name in the AST,
+/// Static dependencies of a parsed formula (§6.1): every cell reference and range (normalized), each with its sheet prefix as written (null = unqualified, CR1.2), and every name in the AST,
 /// including those in branches that evaluation may not take. Walks the tree with an explicit stack, so deep
 /// nesting cannot overflow the call stack.
 /// </summary>
@@ -16,8 +16,8 @@ internal static class DependencyExtractor
     public static FormulaDeps? Extract(ParsedFormula f)
     {
         if (f.IsParseError || f.Root is null) return null;
-        List<int>? cells = null;
-        List<RangeAddress>? ranges = null;
+        List<SheetCell>? cells = null;
+        List<SheetRange>? ranges = null;
         List<string>? names = null;
 
         var stack = new Stack<Node>();
@@ -27,10 +27,10 @@ internal static class DependencyExtractor
             switch (stack.Pop())
             {
                 case RefNode r:
-                    (cells ??= []).Add(new CellAddress(r.Row, r.Col).Key);
+                    (cells ??= []).Add(new SheetCell(r.Sheet, CellAddress.KeyOf(r.Row, r.Col)));
                     break;
                 case RangeNode rn:
-                    (ranges ??= []).Add(Evaluator.Normalize(rn));
+                    (ranges ??= []).Add(new SheetRange(rn.Sheet, Evaluator.Normalize(rn)));
                     break;
                 case NameNode nn:
                     (names ??= []).Add(nn.Name.ToUpperInvariant());
@@ -58,8 +58,8 @@ internal static class DependencyExtractor
 
         if (cells is null && ranges is null && names is null) return null;
         return new FormulaDeps(
-            (IReadOnlyList<int>?)cells ?? [],
-            (IReadOnlyList<RangeAddress>?)ranges ?? [],
+            (IReadOnlyList<SheetCell>?)cells ?? [],
+            (IReadOnlyList<SheetRange>?)ranges ?? [],
             (IReadOnlyList<string>?)names ?? []);
     }
 }

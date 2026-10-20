@@ -20,6 +20,10 @@ public sealed class Workbook
 
     private static readonly CellValue Circ = CellValue.FromError(ErrorCodes.Circ);
 
+    /// <summary>The single sheet's id and name until sheets are added (CR1.1, CR1.2).</summary>
+    private const int SheetId = 0;
+    private const string SheetName = "Sheet1";
+
     /// <summary>
     /// A defined name (§9.6): its defined casing, canonical <c>refersTo</c>, and target (null when
     /// <c>refersTo</c> is <c>#REF!</c>).
@@ -32,7 +36,8 @@ public sealed class Workbook
     private readonly FunctionArityAdapter _arity;
     private readonly Evaluator _evaluator;
     private readonly EvalContext _ctx;
-    private readonly Func<int, bool> _isFormula;
+    private readonly Func<long, bool> _isFormula;
+    private readonly Func<string, int?> _resolveSheet;
     private readonly Dictionary<string, NameDef> _names = new(StringComparer.OrdinalIgnoreCase);
     private readonly UndoHistory _history = new(UndoLimit);
     private long _lastStepId;
@@ -45,7 +50,15 @@ public sealed class Workbook
         _planner = new RecalcPlanner(_graph);
         _ctx = new EvalContext(_store, _names);
         _isFormula = IsFormula;
+        _resolveSheet = ResolveSheet;
     }
+
+    /// <summary>Sheet id for a sheet name as written in a formula (case-insensitive), or null if there is no such sheet (CR1.2).</summary>
+    private static int? ResolveSheet(string name) =>
+        string.Equals(name, SheetName, StringComparison.OrdinalIgnoreCase) ? SheetId : null;
+
+    /// <summary>Global key (CR1.2) of a cell key on the single sheet.</summary>
+    private static long G(int cellKey) => GlobalKey.Of(SheetId, cellKey);
 
     /// <summary>Statistics of the most recent mutating call or load (§9.2).</summary>
     public RecalcStats LastRecalc { get; private set; }
@@ -87,11 +100,12 @@ public sealed class Workbook
 
         var wb = new Workbook();
         foreach (var d in defs) wb.AddName(d);
-        var formulaKeys = new HashSet<int>();
+        var formulaKeys = new HashSet<long>();
         for (int i = 0; i < cells.Count; i++)
         {
-            wb.Apply(keys[i], cells[i].Value);
-            if (wb.IsFormula(keys[i])) formulaKeys.Add(keys[i]);
+            long g = G(keys[i]);
+            wb.Apply(g, cells[i].Value);
+            if (wb.IsFormula(g)) formulaKeys.Add(g);
         }
         var plan = wb._planner.PlanAll(formulaKeys);
         wb.LastRecalc = new RecalcStats(wb.Evaluate(plan, valueChanged: null));
@@ -104,14 +118,14 @@ public sealed class Workbook
     /// </summary>
     public void SetCell(string address, string input)
     {
-        int key = ParseKey(address, nameof(address));
+        long key = G(ParseKey(address, nameof(address)));
         ValidateInput(input, nameof(input));
         string old = CurrentInput(key);
         if (string.Equals(old, input, StringComparison.Ordinal))
         {
             // Phase 1 behaviour kept (§9.2): {X} ∪ dependents(X) are re-evaluated; values cannot change.
-            var valueChanged = new List<int>();
-            LastRecalc = new RecalcStats(Evaluate(_planner.Plan([key], [], _isFormula), valueChanged));
+            var valueChanged = new List<long>();
+            LastRecalc = new RecalcStats(Evaluate(_planner.Plan([key], [], [], _isFormula), valueChanged));
             Raise(valueChanged);
             return;
         }
@@ -126,15 +140,15 @@ public sealed class Workbook
     public void ApplyBatch(IReadOnlyList<KeyValuePair<string, string>> edits)
     {
         ArgumentNullException.ThrowIfNull(edits);
-        var keys = new int[edits.Count];
+        var keys = new long[edits.Count];
         for (int i = 0; i < edits.Count; i++)
         {
-            keys[i] = ParseKey(edits[i].Key, nameof(edits));
+            keys[i] = G(ParseKey(edits[i].Key, nameof(edits)));
             ValidateInput(edits[i].Value, nameof(edits));
         }
 
         // Last wins; each key keeps the position of its first occurrence. OldInput is the pre-commit input.
-        var slot = new Dictionary<int, int>(edits.Count);
+        var slot = new Dictionary<long, int>(edits.Count);
         var list = new List<CellEdit>(edits.Count);
         for (int i = 0; i < edits.Count; i++)
         {
@@ -186,7 +200,7 @@ public sealed class Workbook
         pasted.Keys.CopyTo(keys, 0);
         Array.Sort(keys); // row-major
         var edits = new List<CellEdit>(keys.Length);
-        foreach (int key in keys) edits.Add(new CellEdit(key, CurrentInput(key), pasted[key]));
+        foreach (int key in keys) edits.Add(new CellEdit(G(key), CurrentInput(G(key)), pasted[key]));
         Commit(edits, newNames: null, record: true);
     }
 
@@ -292,11 +306,11 @@ public sealed class Workbook
 
         var edits = new List<CellEdit>(moved.Count * 2);
         foreach (var (key, cell) in _store.All)
-            if (!moved.ContainsKey(key)) edits.Add(new CellEdit(key, cell.Input, ""));
+            if (!moved.ContainsKey(key)) edits.Add(new CellEdit(G(key), cell.Input, ""));
         foreach (var (key, text) in moved)
         {
-            string old = CurrentInput(key);
-            if (!string.Equals(old, text, StringComparison.Ordinal)) edits.Add(new CellEdit(key, old, text));
+            string old = CurrentInput(G(key));
+            if (!string.Equals(old, text, StringComparison.Ordinal)) edits.Add(new CellEdit(G(key), old, text));
         }
         edits.Sort(static (x, y) => x.Key.CompareTo(y.Key)); // row-major, deterministic step contents
 
@@ -473,7 +487,7 @@ public sealed class Workbook
     private void AddName(NameDef d)
     {
         _names[d.Name] = d;
-        _graph.SetNameTarget(d.Name.ToUpperInvariant(), d.Target);
+        _graph.SetNameTarget(d.Name.ToUpperInvariant(), SheetId, d.Target);
     }
 
     /// <summary>
@@ -504,20 +518,21 @@ public sealed class Workbook
             return;
         }
 
-        var changed = new List<int>(real.Count);
-        var keys = new int[real.Count];
+        var changed = new List<long>(real.Count);
+        var keys = new long[real.Count];
         var writes = new (int Key, Cell? Cell)[real.Count];
         for (int i = 0; i < real.Count; i++)
         {
             keys[i] = real[i].Key;
-            writes[i] = (real[i].Key, Prepare(real[i].Key, real[i].NewInput)); // keys are distinct: reads see the old store
+            // Keys are distinct: reads see the old store. The store is keyed by cell key (single sheet).
+            writes[i] = (GlobalKey.Cell(real[i].Key), Prepare(real[i].Key, real[i].NewInput));
             changed.Add(real[i].Key);
         }
         _store.SetMany(writes);
         List<string> changedNames = newNames is null ? [] : InstallNames(newNames);
 
         // The graph is fully updated before planning and is not touched while the plan is produced or evaluated.
-        var plan = _planner.Plan(keys, changedNames, _isFormula);
+        var plan = _planner.Plan(keys, changedNames, [], _isFormula);
         LastRecalc = new RecalcStats(Evaluate(plan, changed));
 
         // History/dirty state is final before handlers run (they may read IsDirty/CanUndo, or throw).
@@ -554,20 +569,20 @@ public sealed class Workbook
         foreach (var gone in old.Keys)
         {
             string upper = gone.ToUpperInvariant();
-            _graph.SetNameTarget(upper, null);
+            _graph.SetNameTarget(upper, null, null);
             changed.Add(upper);
         }
         return changed;
     }
 
-    private string CurrentInput(int key) => _store.TryGet(key, out var c) ? c.Input : "";
+    private string CurrentInput(long key) => _store.TryGet(GlobalKey.Cell(key), out var c) ? c.Input : "";
 
     /// <summary>Interprets and stores one input, updating the dependency graph.</summary>
-    private void Apply(int key, string input)
+    private void Apply(long key, string input)
     {
         var cell = Prepare(key, input);
-        if (cell is null) _store.Remove(key);
-        else _store.Set(key, cell);
+        if (cell is null) _store.Remove(GlobalKey.Cell(key));
+        else _store.Set(GlobalKey.Cell(key), cell);
     }
 
     /// <summary>
@@ -575,19 +590,19 @@ public sealed class Workbook
     /// returned cell (null = blank). A formula starts from the key's previous value so recalc can tell whether it
     /// changed.
     /// </summary>
-    private Cell? Prepare(int key, string input)
+    private Cell? Prepare(long key, string input)
     {
-        bool hadCell = _store.TryGet(key, out var old);
+        bool hadCell = _store.TryGet(GlobalKey.Cell(key), out var old);
         var cell = InputInterpreter.Interpret(input, _arity);
 
         if (cell is { Kind: CellKind.Formula })
         {
             // Start from the previous value so recalc can tell whether the value actually changed.
             if (hadCell) cell.Value = old.Value;
-            _graph.SetDependencies(key, cell.Deps);
+            _graph.SetDependencies(key, cell.Deps, _resolveSheet);
         }
         else if (hadCell && old.Kind == CellKind.Formula)
-            _graph.SetDependencies(key, null);
+            _graph.SetDependencies(key, null, _resolveSheet);
         return cell;
     }
 
@@ -595,20 +610,20 @@ public sealed class Workbook
     /// Evaluates the plan in order, each formula once; cycle members get <c>#CIRC!</c> (§6.7). Records keys whose
     /// value changed. Returns the number of formula cells evaluated.
     /// </summary>
-    private int Evaluate(RecalcPlan plan, List<int>? valueChanged)
+    private int Evaluate(RecalcPlan plan, List<long>? valueChanged)
     {
         var order = plan.Order;
         var cycles = plan.CycleMembers;
         bool anyCycles = cycles.Count > 0;
         for (int i = 0; i < order.Count; i++)
         {
-            int key = order[i];
-            _store.TryGet(key, out var cell);
+            long key = order[i];
+            _store.TryGet(GlobalKey.Cell(key), out var cell);
             CellValue v;
             if (anyCycles && cycles.Contains(key)) v = Circ;
             else
             {
-                var at = CellAddress.FromKey(key);
+                var at = GlobalKey.Address(key);
                 _ctx.FormulaRow = at.Row;
                 _ctx.FormulaCol = at.Col;
                 v = _evaluator.Evaluate(cell.Formula!, _ctx);
@@ -622,18 +637,18 @@ public sealed class Workbook
         return order.Count;
     }
 
-    private void Raise(List<int> changed)
+    private void Raise(List<long> changed)
     {
         var handler = CellsChanged;
         if (handler is null || changed.Count == 0) return;
         changed.Sort();
         var addresses = new List<string>(changed.Count);
         for (int i = 0; i < changed.Count; i++)
-            if (i == 0 || changed[i] != changed[i - 1]) addresses.Add(CellAddress.FromKey(changed[i]).ToString());
+            if (i == 0 || changed[i] != changed[i - 1]) addresses.Add(GlobalKey.Address(changed[i]).ToString()); // unqualified (CR-1 Task 3)
         handler(this, new CellsChangedEventArgs(addresses.ToArray()));
     }
 
-    private bool IsFormula(int key) => _store.TryGet(key, out var c) && c.Kind == CellKind.Formula;
+    private bool IsFormula(long key) => _store.TryGet(GlobalKey.Cell(key), out var c) && c.Kind == CellKind.Formula;
 
     private static int ParseKey(string address, string paramName) =>
         CellAddress.TryParse(address, out var a) ? a.Key : throw new ArgumentException($"Invalid cell address: '{address}'", paramName);
