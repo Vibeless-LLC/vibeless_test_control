@@ -59,6 +59,16 @@ public sealed class DocumentSession
     public bool TryOpenRecovered(string path, out string? error) =>
         Try(() => Replace(GridlineFile.LoadFromPath(path), null, recovered: true), out error);
 
+    /// <summary>
+    /// Imports a CSV file (§8.5) as an untitled document that counts as dirty until it is saved (§11.5), reusing the
+    /// recovered flag. The session is unchanged on failure.
+    /// </summary>
+    public bool TryImportCsv(string path, out string? error) =>
+        Try(() => Replace(CsvFile.ImportFromPath(path), null, recovered: true), out error);
+
+    /// <summary>Exports the workbook as CSV (§8.5). Does not touch the dirty state or the file path.</summary>
+    public bool TryExportCsv(string path, out string? error) => Try(() => CsvFile.ExportToPath(_workbook, path), out error);
+
     public bool TrySave(out string? error) => Try(Save, out error);
 
     public bool TrySaveAs(string path, out string? error) => Try(() => SaveAs(path), out error);

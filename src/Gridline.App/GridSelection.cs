@@ -23,6 +23,31 @@ public sealed class GridSelection
     public void MoveBy(int dRow, int dCol, bool extend) =>
         Set(Clamp((long)Active.Row + dRow, (long)Active.Col + dCol), extend);
 
+    /// <summary>
+    /// Selects whole row <paramref name="row"/> (A{r}:ZZ{r}); with <paramref name="extend"/> the rows between the anchor
+    /// row and <paramref name="row"/>. The active cell is in column A.
+    /// </summary>
+    public void SelectRow(int row, bool extend)
+    {
+        int anchorRow = extend ? Anchor.Row : Math.Clamp(row, 1, CellAddress.MaxRows);
+        Apply(new CellAddress(anchorRow, CellAddress.MaxColumns), Clamp(row, 1));
+    }
+
+    /// <summary>Selects whole column <paramref name="col"/> (X1:X100000); with <paramref name="extend"/> the columns between the anchor column and it.</summary>
+    public void SelectColumn(int col, bool extend)
+    {
+        int anchorCol = extend ? Anchor.Col : Math.Clamp(col, 1, CellAddress.MaxColumns);
+        Apply(new CellAddress(CellAddress.MaxRows, anchorCol), Clamp(1, col));
+    }
+
+    private void Apply(CellAddress anchor, CellAddress active)
+    {
+        if (active == Active && anchor == Anchor) return;
+        Active = active;
+        Anchor = anchor;
+        Changed?.Invoke(this, EventArgs.Empty);
+    }
+
     private void Set(CellAddress active, bool extend)
     {
         var anchor = extend ? Anchor : active;

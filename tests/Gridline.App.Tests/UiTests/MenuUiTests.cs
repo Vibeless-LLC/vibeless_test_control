@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using FlaUI.Core.Input;
 using FlaUI.Core.Tools;
 using FlaUI.Core.WindowsAPI;
@@ -51,5 +52,49 @@ public class MenuUiTests
             Assert.NotNull(app.Desktop.FindFirstDescendant(c => c.ByAutomationId("MenuSave")));
         }
         finally { Keyboard.Type(VirtualKeyShort.ESCAPE); }
+    }
+
+    [Fact]
+    public void ImportCsv_MenuExists()
+    {
+        using var app = new AppFixture();
+        app.Find("MenuEdit");
+        app.Find("MenuFile").Click();
+        try
+        {
+            Assert.NotNull(Retry.WhileNull(() => app.Desktop.FindFirstDescendant(c => c.ByName("Import CSV...")),
+                TimeSpan.FromSeconds(5)).Result);
+            Assert.NotNull(app.Desktop.FindFirstDescendant(c => c.ByName("Export CSV...")));
+            Assert.NotNull(app.Desktop.FindFirstDescendant(c => c.ByAutomationId("MenuImportCsv")));
+            Assert.NotNull(app.Desktop.FindFirstDescendant(c => c.ByAutomationId("MenuExportCsv")));
+        }
+        finally { Keyboard.Type(VirtualKeyShort.ESCAPE); }
+    }
+
+    [DllImport("user32.dll")]
+    private static extern uint GetDpiForWindow(IntPtr hwnd);
+
+    [Fact]
+    public void RowHeader_InsertShiftsData()
+    {
+        using var app = new AppFixture();
+        app.SetCell("A1", "5", "N:5");
+
+        // Row 1's header sits at the grid's left edge, just below the column header (sizes in DIPs, scaled to pixels).
+        double scale = GetDpiForWindow(app.MainWindow.Properties.NativeWindowHandle.Value) / 96.0;
+        var rect = app.Find("Grid").BoundingRectangle;
+        var point = new System.Drawing.Point(
+            (int)(rect.Left + 28 * scale),   // GridControl.RowHeaderWidth / 2
+            (int)(rect.Top + 33 * scale));   // HeaderHeight + RowHeight / 2
+        Mouse.RightClick(point);
+
+        var insert = Retry.WhileNull(() => app.Desktop.FindFirstDescendant(c => c.ByAutomationId("HeaderInsert")),
+            TimeSpan.FromSeconds(10), TimeSpan.FromMilliseconds(100)).Result
+            ?? throw new InvalidOperationException("Insert item not found in the header context menu");
+        if (insert.Patterns.Invoke.IsSupported) insert.Patterns.Invoke.Pattern.Invoke();
+        else insert.Click();
+
+        app.GoTo("A2");
+        app.WaitText("SelectionValue", t => t == "N:5", "N:5 after row insert");
     }
 }

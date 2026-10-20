@@ -18,7 +18,9 @@ public sealed class DocumentLifecycle(
     IUnsavedChangesPrompt prompt,
     Func<string?> pickSavePath,
     Func<string?> pickOpenPath,
-    Action<string> reportError)
+    Action<string> reportError,
+    Func<string?>? pickCsvImportPath = null,
+    Func<string?>? pickCsvExportPath = null)
 {
     /// <summary>True when it is fine to discard the current document: clean, Don't Save, or a completed Save.</summary>
     public bool ConfirmDiscard()
@@ -61,6 +63,24 @@ public sealed class DocumentLifecycle(
         string? path = pickOpenPath();
         if (path is null) return false;
         return Report(session.TryOpen(path, out var err), err);
+    }
+
+    /// <summary>Import a CSV file as an untitled dirty document if the current one may be discarded (§11.5).</summary>
+    public bool ImportCsv()
+    {
+        if (pickCsvImportPath is null || !ConfirmDiscard()) return false;
+        string? path = pickCsvImportPath();
+        if (path is null) return false;
+        return Report(session.TryImportCsv(path, out var err), err);
+    }
+
+    /// <summary>Exports the workbook as CSV; no prompt, the document state is unchanged.</summary>
+    public bool ExportCsv()
+    {
+        if (pickCsvExportPath is null) return false;
+        string? path = pickCsvExportPath();
+        if (path is null) return false;
+        return Report(session.TryExportCsv(path, out var err), err);
     }
 
     /// <summary>True when the application may exit.</summary>

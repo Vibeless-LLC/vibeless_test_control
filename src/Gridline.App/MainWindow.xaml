@@ -27,6 +27,9 @@
                           AutomationProperties.AutomationId="MenuSave" />
                 <MenuItem Header="Save _As..." Command="SaveAs" InputGestureText="Ctrl+Shift+S" />
                 <Separator />
+                <MenuItem Header="_Import CSV..." Click="OnImportCsv" AutomationProperties.AutomationId="MenuImportCsv" />
+                <MenuItem Header="E_xport CSV..." Click="OnExportCsv" AutomationProperties.AutomationId="MenuExportCsv" />
+                <Separator />
                 <MenuItem Header="E_xit" Command="Close" />
             </MenuItem>
             <MenuItem Header="_Edit" AutomationProperties.AutomationId="MenuEdit">

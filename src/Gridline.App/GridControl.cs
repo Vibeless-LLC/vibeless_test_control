@@ -91,6 +91,9 @@ public sealed class GridControl : FrameworkElement
     /// <summary>Asks the host to clear the selection (Delete).</summary>
     public event EventHandler? ClearRequested;
 
+    /// <summary>Raised on a right-click over a row or column header: the kind and the 1-based row/column index.</summary>
+    public event EventHandler<HeaderClickEventArgs>? HeaderContextRequested;
+
     /// <summary>Raised when <see cref="TopRow"/>, <see cref="LeftCol"/> or the viewport size changes.</summary>
     public event EventHandler? ViewportChanged;
 
@@ -117,6 +120,23 @@ public sealed class GridControl : FrameworkElement
         long row = _topRow + (long)Math.Floor((Math.Max(p.Y, HeaderHeight) - HeaderHeight) / RowHeight);
         long col = _leftCol + (long)Math.Floor((Math.Max(p.X, RowHeaderWidth) - RowHeaderWidth) / ColumnWidth);
         return new CellAddress((int)Math.Clamp(row, 1, CellAddress.MaxRows), (int)Math.Clamp(col, 1, CellAddress.MaxColumns));
+    }
+
+    /// <summary>The header under a point (not the corner, not past the grid), or null.</summary>
+    public (HeaderKind Kind, int Index)? HitTestHeader(Point p)
+    {
+        if (p.X < 0 || p.Y < 0) return null;
+        if (p.Y < HeaderHeight && p.X >= RowHeaderWidth)
+        {
+            long col = _leftCol + (long)Math.Floor((p.X - RowHeaderWidth) / ColumnWidth);
+            return col <= CellAddress.MaxColumns ? (HeaderKind.Column, (int)col) : null;
+        }
+        if (p.X < RowHeaderWidth && p.Y >= HeaderHeight)
+        {
+            long row = _topRow + (long)Math.Floor((p.Y - HeaderHeight) / RowHeight);
+            return row <= CellAddress.MaxRows ? (HeaderKind.Row, (int)row) : null;
+        }
+        return null;
     }
 
     private void SetViewport(int top, int left)
@@ -301,9 +321,26 @@ public sealed class GridControl : FrameworkElement
         base.OnMouseLeftButtonDown(e);
         Focus();
         var p = e.GetPosition(this);
+        if (HitTestHeader(p) is { } h)
+        {
+            bool extend = Keyboard.Modifiers.HasFlag(ModifierKeys.Shift);
+            if (h.Kind == HeaderKind.Row) Selection.SelectRow(h.Index, extend);
+            else Selection.SelectColumn(h.Index, extend);
+            e.Handled = true;
+            return;
+        }
         if (p.X < RowHeaderWidth || p.Y < HeaderHeight) return;
         Selection.MoveTo(HitTestCell(p), Keyboard.Modifiers.HasFlag(ModifierKeys.Shift));
         _dragging = CaptureMouse();
+        e.Handled = true;
+    }
+
+    protected override void OnMouseRightButtonUp(MouseButtonEventArgs e)
+    {
+        base.OnMouseRightButtonUp(e);
+        if (HitTestHeader(e.GetPosition(this)) is not { } h) return;
+        Focus();
+        HeaderContextRequested?.Invoke(this, new HeaderClickEventArgs(h.Kind, h.Index));
         e.Handled = true;
     }
 
@@ -354,4 +391,12 @@ public sealed class GridControl : FrameworkElement
 
         protected override bool IsKeyboardFocusableCore() => true;
     }
+}
+
+/// <summary>A header hit: row or column and its 1-based index.</summary>
+public sealed class HeaderClickEventArgs(HeaderKind kind, int index) : EventArgs
+{
+    public HeaderKind Kind { get; } = kind;
+
+    public int Index { get; } = index;
 }

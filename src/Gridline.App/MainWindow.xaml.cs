@@ -9,6 +9,7 @@ namespace Gridline.App;
 
 public partial class MainWindow : Window
 {
+    private const string CsvFilter = "CSV (*.csv)|*.csv|All files (*.*)|*.*";
     private const string FileFilter = "Gridline (*.gridline)|*.gridline";
     private readonly DocumentSession _session;
     private readonly SheetController _controller;
@@ -28,7 +29,8 @@ public partial class MainWindow : Window
         _session = session;
         _recovery = recovery;
         InitializeComponent();
-        _lifecycle = new DocumentLifecycle(_session, new WindowPrompt(this), PickSavePath, PickOpenPath, ShowError);
+        _lifecycle = new DocumentLifecycle(_session, new WindowPrompt(this), PickSavePath, PickOpenPath, ShowError,
+            PickCsvImportPath, PickCsvExportPath);
         Closing += OnWindowClosing;
         // The editor overlay follows the grid's layout constants.
         EditorLayer.Margin = new Thickness(GridControl.RowHeaderWidth, GridControl.HeaderHeight, 0, 0);
@@ -51,6 +53,7 @@ public partial class MainWindow : Window
         Sheet.ViewportChanged += (_, _) => OnViewportChanged();
         Sheet.Selection.Changed += (_, _) => RefreshBars();
         Sheet.EditRequested += (_, initial) => BeginEdit(initial);
+        Sheet.HeaderContextRequested += (_, e) => ShowHeaderMenu(e.Kind, e.Index);
         Sheet.ClearRequested += (_, _) => _controller.ClearSelection();
         VScroll.ValueChanged += (_, e) => Sheet.TopRow = (int)Math.Round(e.NewValue);
         HScroll.ValueChanged += (_, e) => Sheet.LeftCol = (int)Math.Round(e.NewValue);
@@ -286,6 +289,74 @@ public partial class MainWindow : Window
     {
         var dlg = new OpenFileDialog { Filter = FileFilter };
         return dlg.ShowDialog(this) == true ? dlg.FileName : null;
+    }
+
+    private string? PickCsvImportPath()
+    {
+        var dlg = new OpenFileDialog { Filter = CsvFilter };
+        return dlg.ShowDialog(this) == true ? dlg.FileName : null;
+    }
+
+    private string? PickCsvExportPath()
+    {
+        var dlg = new SaveFileDialog { Filter = CsvFilter, DefaultExt = ".csv" };
+        return dlg.ShowDialog(this) == true ? dlg.FileName : null;
+    }
+
+    private void OnImportCsv(object s, RoutedEventArgs e) { if (CommitPending()) _lifecycle.ImportCsv(); }
+
+    private void OnExportCsv(object s, RoutedEventArgs e) { if (CommitPending()) _lifecycle.ExportCsv(); }
+
+    // ---- Header context menu (§11.5) ----
+
+    private void ShowHeaderMenu(HeaderKind kind, int index)
+    {
+        if (!CommitPending()) return;
+        var (first, count) = HeaderTarget.Resolve(kind, index, Sheet.Selection.Range);
+        // A click outside the current full-row/column selection selects the clicked header.
+        if (count == 1 && !(first == index && IsSelectedHeader(kind, index)))
+        {
+            if (kind == HeaderKind.Row) Sheet.Selection.SelectRow(index, extend: false);
+            else Sheet.Selection.SelectColumn(index, extend: false);
+        }
+        var insert = new MenuItem { Header = "Insert", Name = "HeaderInsert" };
+        var delete = new MenuItem { Header = "Delete", Name = "HeaderDelete" };
+        System.Windows.Automation.AutomationProperties.SetAutomationId(insert, "HeaderInsert");
+        System.Windows.Automation.AutomationProperties.SetAutomationId(delete, "HeaderDelete");
+        insert.Click += (_, _) => ApplyStructural(kind, first, count, insert: true);
+        delete.Click += (_, _) => ApplyStructural(kind, first, count, insert: false);
+        var menu = new ContextMenu { PlacementTarget = Sheet, Placement = System.Windows.Controls.Primitives.PlacementMode.MousePoint };
+        menu.Items.Add(insert);
+        menu.Items.Add(delete);
+        menu.Closed += (_, _) => Sheet.Focus();
+        menu.IsOpen = true;
+    }
+
+    private bool IsSelectedHeader(HeaderKind kind, int index)
+    {
+        var r = Sheet.Selection.Range;
+        return kind == HeaderKind.Row
+            ? r.TopLeft.Col == 1 && r.BottomRight.Col == CellAddress.MaxColumns && r.TopLeft.Row == index && r.Rows == 1
+            : r.TopLeft.Row == 1 && r.BottomRight.Row == CellAddress.MaxRows && r.TopLeft.Col == index && r.Cols == 1;
+    }
+
+    private void ApplyStructural(HeaderKind kind, int first, int count, bool insert)
+    {
+        var wb = _session.Workbook;
+        try
+        {
+            if (kind == HeaderKind.Row)
+            {
+                if (insert) wb.InsertRows(first, count); else wb.DeleteRows(first, count);
+            }
+            else if (insert) wb.InsertColumns(first, count);
+            else wb.DeleteColumns(first, count);
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or ArgumentOutOfRangeException)
+        {
+            MessageBox.Show(this, ex.Message, "Gridline", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+        RefreshBars();
     }
 
     private void ShowError(string message) =>
