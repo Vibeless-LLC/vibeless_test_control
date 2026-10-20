@@ -1,6 +1,7 @@
 <Window x:Class="Gridline.App.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="clr-namespace:Gridline.App"
         Title="Gridline - Untitled" Width="1280" Height="800">
     <Window.CommandBindings>
         <CommandBinding Command="New" Executed="OnNew" />
@@ -54,8 +55,20 @@
                 <TextBlock x:Name="SelectionSum" AutomationProperties.AutomationId="SelectionSum" />
             </StatusBarItem>
         </StatusBar>
-        <!-- Placeholder until Task 6; a Label (not a bare Border) so UI Automation exposes it. -->
-        <Label x:Name="GridHost" BorderThickness="1" BorderBrush="Gray"
-               AutomationProperties.AutomationId="Grid" />
+        <Grid x:Name="GridHost">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="*" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+            <local:GridControl x:Name="Sheet" AutomationProperties.AutomationId="Grid" />
+            <ScrollBar x:Name="VScroll" Grid.Column="1" Orientation="Vertical"
+                       Minimum="1" Maximum="100000" SmallChange="1" Value="1" />
+            <ScrollBar x:Name="HScroll" Grid.Row="1" Orientation="Horizontal"
+                       Minimum="1" Maximum="702" SmallChange="1" Value="1" />
+        </Grid>
     </DockPanel>
 </Window>

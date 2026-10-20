@@ -16,8 +16,30 @@ public partial class MainWindow : Window
     {
         _session = session;
         InitializeComponent();
-        _session.StateChanged += (_, _) => Title = _session.Title;
+        _session.StateChanged += (_, _) => OnSessionStateChanged();
         Title = _session.Title;
+        Sheet.Workbook = _session.Workbook;
+        Sheet.ViewportChanged += (_, _) => SyncScrollBars();
+        VScroll.ValueChanged += (_, e) => Sheet.TopRow = (int)Math.Round(e.NewValue);
+        HScroll.ValueChanged += (_, e) => Sheet.LeftCol = (int)Math.Round(e.NewValue);
+        Loaded += (_, _) => Sheet.Focus();
+    }
+
+    private void OnSessionStateChanged()
+    {
+        Title = _session.Title;
+        Sheet.Workbook = _session.Workbook;
+    }
+
+    /// <summary>Scrollbar ranges follow §11.3: vertical 1..100000 → TopRow, horizontal 1..702 → LeftCol.</summary>
+    private void SyncScrollBars()
+    {
+        VScroll.ViewportSize = Sheet.VisibleRowCount;
+        VScroll.LargeChange = Sheet.VisibleRowCount;
+        VScroll.Value = Sheet.TopRow;
+        HScroll.ViewportSize = Sheet.VisibleColumnCount;
+        HScroll.LargeChange = Sheet.VisibleColumnCount;
+        HScroll.Value = Sheet.LeftCol;
     }
 
     private void OnNew(object s, ExecutedRoutedEventArgs e) => _session.New();
