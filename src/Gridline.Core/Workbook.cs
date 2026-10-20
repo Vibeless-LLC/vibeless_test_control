@@ -24,7 +24,7 @@ public sealed class Workbook
     /// A defined name (§9.6): its defined casing, canonical <c>refersTo</c>, and target (null when
     /// <c>refersTo</c> is <c>#REF!</c>).
     /// </summary>
-    private readonly record struct NameDef(string Name, string RefersTo, RangeAddress? Target);
+    private readonly record struct NameDef(string Name, string RefersTo, RangeAddress? Target, bool IsRange);
 
     private readonly CellStore _store = new();
     private readonly DependencyGraph _graph = new();
@@ -241,6 +241,36 @@ public sealed class Workbook
     }
 
     /// <summary>
+    /// Defines or redefines a name (§9.6) as one undo step. <paramref name="refersTo"/> must be a fully absolute cell
+    /// (<c>$B$1</c>) or range (<c>$A$1:$C$10</c>); its form is kept, so a 1x1 range stays a range. An existing name
+    /// (case-insensitive) is replaced and takes the new casing. Identical casing and target is a no-op. Invalid
+    /// name or <paramref name="refersTo"/> (including <c>#REF!</c>) throws <see cref="ArgumentException"/>.
+    /// </summary>
+    public void DefineName(string name, string refersTo)
+    {
+        ArgumentNullException.ThrowIfNull(name);
+        ArgumentNullException.ThrowIfNull(refersTo);
+        if (refersTo == ErrorCodes.Ref) throw new ArgumentException("refersTo cannot be #REF!", nameof(refersTo));
+        var d = ParseName(name, refersTo, nameof(name));
+        var list = new List<KeyValuePair<string, string>>(_names.Count + 1);
+        foreach (var e in _names.Values)
+            if (!e.Name.Equals(d.Name, StringComparison.OrdinalIgnoreCase)) list.Add(new(e.Name, e.RefersTo));
+        list.Add(new(d.Name, d.RefersTo));
+        ReplaceNames(list);
+    }
+
+    /// <summary>Deletes a name (§9.6) as one undo step; dependents become <c>#NAME?</c>. Unknown name throws <see cref="ArgumentException"/>.</summary>
+    public void DeleteName(string name)
+    {
+        ArgumentNullException.ThrowIfNull(name);
+        if (!_names.ContainsKey(name)) throw new ArgumentException($"Unknown name: '{name}'", nameof(name));
+        var list = new List<KeyValuePair<string, string>>(_names.Count);
+        foreach (var e in _names.Values)
+            if (!e.Name.Equals(name, StringComparison.OrdinalIgnoreCase)) list.Add(new(e.Name, e.RefersTo));
+        ReplaceNames(list);
+    }
+
+    /// <summary>
     /// Replaces all defined names as one mutation and one undo step (none if identical, casing included). Validates
     /// every name and <c>refersTo</c> (§9.6) and rejects case-insensitive duplicates before changing anything.
     /// Phase 3 <c>DefineName</c>/<c>DeleteName</c> route through here.
@@ -293,10 +323,11 @@ public sealed class Workbook
     private static NameDef ParseName(string name, string refersTo, string paramName)
     {
         if (!NameRules.IsValidName(name)) throw new ArgumentException($"Invalid name: '{name}'", paramName);
-        if (refersTo == ErrorCodes.Ref) return new NameDef(name, ErrorCodes.Ref, null);
+        if (refersTo == ErrorCodes.Ref) return new NameDef(name, ErrorCodes.Ref, null, false);
         if (!NameRules.TryParseRefersTo(refersTo, out var target))
             throw new ArgumentException($"Invalid refersTo for name '{name}': '{refersTo}'", paramName);
-        return new NameDef(name, NameRules.FormatRefersTo(target), target);
+        bool isRange = refersTo.Contains(':');
+        return new NameDef(name, NameRules.FormatRefersTo(target, isRange), target, isRange);
     }
 
     /// <summary>Stores a (validated) name and points its dependency-graph node at the target (§6.1, §9.6).</summary>
@@ -475,7 +506,7 @@ public sealed class Workbook
             if (names.TryGetValue(name, out var d) && d.Target is { } t)
             {
                 target = t;
-                isRange = t.TopLeft != t.BottomRight;
+                isRange = d.IsRange;
                 return true;
             }
             target = default;

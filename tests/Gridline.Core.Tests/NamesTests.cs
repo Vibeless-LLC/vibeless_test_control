@@ -1,3 +1,4 @@
+using Gridline.Core.Addressing;
 namespace Gridline.Core.Tests;
 
 /// <summary>Phase 1 name storage and evaluation subset loaded through FromSnapshot (§8.2, §9.6, §6.7).</summary>
@@ -118,11 +119,12 @@ public class NamesTests
     }
 
     [Fact]
-    public void SingleCellRangeRefersTo_IsCellName()
+    public void SingleCellRangeRefersTo_StaysARange()
     {
-        var wb = Load([KV("One", "$A$1:$A$1")], KV("A1", "4"), KV("B1", "=One*2"));
-        Assert.Equal("N:8", V(wb, "B1"));
-        Assert.Equal(new[] { KV("One", "$A$1") }, wb.GetNames());
+        var wb = Load([KV("One", "$A$1:$A$1")], KV("A1", "4"), KV("B1", "=One*2"), KV("B2", "=SUM(One)"));
+        Assert.Equal("E:#VALUE!", V(wb, "B1"));
+        Assert.Equal("N:4", V(wb, "B2"));
+        Assert.Equal(new[] { KV("One", "$A$1:$A$1") }, wb.GetNames());
     }
 
     [Fact]
@@ -138,5 +140,135 @@ public class NamesTests
     {
         var wb = Load([KV("Rate", "$B$1")], KV("B1", "5"), KV("A1", "=Rate"));
         Assert.Equal(1, wb.LastRecalc.EvaluatedFormulaCount);
+    }
+
+    // ---- public DefineName / DeleteName (§9.6) ----
+
+    [Theory] [InlineData("Rate")] [InlineData("_x.y")] [InlineData("ABCD1")] [InlineData("A1B")]
+    public void ValidNames(string n) => Assert.True(NameRules.IsValidName(n));
+
+    [Theory] [InlineData("1a")] [InlineData("TRUE")] [InlineData("false")] [InlineData("A1")] [InlineData("ZZZ99")] [InlineData("a b")] [InlineData("")]
+    public void InvalidNames(string n) => Assert.False(NameRules.IsValidName(n));
+
+    [Fact]
+    public void RefersTo_MustBeAbsolute()
+    {
+        var wb = new Workbook();
+        Assert.Throws<ArgumentException>(() => wb.DefineName("R", "B1"));
+        Assert.Throws<ArgumentException>(() => wb.DefineName("R", "$B1"));
+        Assert.Throws<ArgumentException>(() => wb.DefineName("R", "#REF!"));
+        Assert.Throws<ArgumentException>(() => wb.DefineName("A1", "$A$1"));
+        Assert.False(wb.CanUndo);
+        wb.DefineName("R", "$b$1");
+        Assert.Equal("$B$1", wb.GetNames()[0].Value);
+    }
+
+    [Fact]
+    public void UndefinedName_ResolvesWhenDefined()
+    {
+        var wb = new Workbook();
+        wb.SetCell("A1", "=Rate*2");
+        Assert.Equal("E:#NAME?", V(wb, "A1"));
+        wb.SetCell("B1", "4");
+        wb.DefineName("rate", "$B$1");
+        Assert.Equal("N:8", V(wb, "A1"));
+        wb.SetCell("B1", "5");
+        Assert.Equal("N:10", V(wb, "A1"));
+    }
+
+    [Fact]
+    public void DefinedRangeName_InSum_AndAloneIsValue()
+    {
+        var wb = new Workbook();
+        wb.SetCell("A1", "1"); wb.SetCell("A2", "2");
+        wb.DefineName("Total", "$A$1:$A$2");
+        wb.SetCell("B1", "=SUM(Total)");
+        Assert.Equal("N:3", V(wb, "B1"));
+        wb.SetCell("B2", "=Total");
+        Assert.Equal("E:#VALUE!", V(wb, "B2"));
+    }
+
+    [Fact]
+    public void OneByOneRangeName_IsRange_FormKept()
+    {
+        var wb = new Workbook();
+        wb.SetCell("A1", "4");
+        wb.DefineName("R", "$a$1:$a$1");
+        wb.SetCell("B1", "=R");
+        Assert.Equal("E:#VALUE!", V(wb, "B1"));
+        Assert.Equal("$A$1:$A$1", wb.GetNames()[0].Value);
+    }
+
+    [Fact]
+    public void Redefine_KeepsNewCasing_Recalcs()
+    {
+        var wb = new Workbook();
+        wb.SetCell("A1", "1"); wb.SetCell("A2", "2");
+        wb.DefineName("x", "$A$1");
+        wb.SetCell("B1", "=X");
+        wb.DefineName("X", "$A$2");
+        Assert.Equal("X", wb.GetNames()[0].Key);
+        Assert.Single(wb.GetNames());
+        Assert.Equal("N:2", V(wb, "B1"));
+    }
+
+    [Fact]
+    public void Redefine_Identical_NoStepNoEvent_CasingOnlyIsAStep()
+    {
+        var wb = new Workbook();
+        wb.DefineName("Rate", "$A$1");
+        int n = 0;
+        wb.CellsChanged += (_, _) => n++;
+        wb.DefineName("Rate", "$a$1");
+        Assert.Equal(0, n);
+        wb.DefineName("RATE", "$A$1");
+        Assert.Equal("RATE", wb.GetNames()[0].Key);
+        wb.Undo();
+        Assert.Equal("Rate", wb.GetNames()[0].Key);
+        wb.Undo();
+        Assert.Empty(wb.GetNames()); // the identical redefinition recorded nothing
+    }
+
+    [Fact]
+    public void DeleteName_Unknown_Throws_Known_GivesNameError()
+    {
+        var wb = new Workbook();
+        Assert.Throws<ArgumentException>(() => wb.DeleteName("nope"));
+        wb.DefineName("R", "$A$1");
+        wb.SetCell("B1", "=R");
+        wb.DeleteName("r");
+        Assert.Equal("E:#NAME?", V(wb, "B1"));
+        wb.Undo();
+        Assert.Equal("N:0", V(wb, "B1"));
+    }
+
+    [Fact]
+    public void Name_Cycle()
+    {
+        var wb = new Workbook();
+        wb.DefineName("Me", "$A$1");
+        wb.SetCell("A1", "=Me+1");
+        Assert.Equal("E:#CIRC!", V(wb, "A1"));
+    }
+
+    [Fact]
+    public void Names_SortedOrdinalIgnoreCase()
+    {
+        var wb = new Workbook();
+        wb.DefineName("b", "$A$1"); wb.DefineName("A", "$A$1"); wb.DefineName("_z", "$A$1");
+        var expected = new[] { "b", "A", "_z" }.OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToArray();
+        Assert.Equal(expected, wb.GetNames().Select(k => k.Key));
+    }
+
+    [Fact]
+    public void Names_Undo()
+    {
+        var wb = new Workbook();
+        wb.DefineName("R", "$A$1");
+        wb.DefineName("R", "$A$2");
+        wb.Undo();
+        Assert.Equal("$A$1", wb.GetNames()[0].Value);
+        wb.Undo();
+        Assert.Empty(wb.GetNames());
     }
 }

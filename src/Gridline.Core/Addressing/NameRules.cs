@@ -54,6 +54,14 @@ public static class NameRules
         return target.TopLeft == target.BottomRight ? Abs(target.TopLeft) : Abs(target.TopLeft) + ":" + Abs(target.BottomRight);
     }
 
+    /// <summary>As above, but with <paramref name="asRange"/> a 1x1 target keeps its range form (<c>$A$1:$A$1</c>).</summary>
+    public static string FormatRefersTo(RangeAddress target, bool asRange)
+    {
+        if (!asRange) return FormatRefersTo(target);
+        string a = FormatRefersTo(new RangeAddress(target.TopLeft, target.TopLeft));
+        return target.TopLeft == target.BottomRight ? a + ":" + a : FormatRefersTo(target);
+    }
+
     /// <summary><c>$LETTERS$DIGITS</c>, then the ordinary in-bounds cell address rules.</summary>
     private static bool TryParseAbsolute(ReadOnlySpan<char> s, out CellAddress a)
     {

@@ -47,4 +47,12 @@ public class NameRulesTests
         Assert.Equal("$B$1", NameRules.FormatRefersTo(RangeAddress.Parse("B1")));
         Assert.Equal("$A$1:$A$10", NameRules.FormatRefersTo(RangeAddress.Parse("A10:A1")));
     }
+
+    [Fact]
+    public void FormatRefersTo_AsRange_KeepsOneByOneRangeForm()
+    {
+        Assert.Equal("$A$1:$A$1", NameRules.FormatRefersTo(RangeAddress.Parse("A1"), true));
+        Assert.Equal("$A$1", NameRules.FormatRefersTo(RangeAddress.Parse("A1"), false));
+        Assert.Equal("$A$1:$A$10", NameRules.FormatRefersTo(RangeAddress.Parse("A1:A10"), true));
+    }
 }
