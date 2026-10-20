@@ -30,6 +30,8 @@ public class ArityTests
         // §7.4 Lookup and reference — 9
         { "VLOOKUP", 3, 4 }, { "HLOOKUP", 3, 4 }, { "INDEX", 2, 3 }, { "MATCH", 2, 3 }, { "CHOOSE", 2, V },
         { "ROW", 0, 1 }, { "COLUMN", 0, 1 }, { "ROWS", 1, 1 }, { "COLUMNS", 1, 1 },
+        // §7.5 Conditional aggregation — 3
+        { "SUMIF", 2, 3 }, { "COUNTIF", 2, 2 }, { "AVERAGEIF", 2, 3 },
     };
 
     private static string Call(string name, int argCount) =>
@@ -57,7 +59,7 @@ public class ArityTests
     public void Registry_HasExactlyTheSpecFunctions()
     {
         var expected = SpecArities.Select(row => (string)row[0]).OrderBy(n => n, StringComparer.Ordinal).ToArray();
-        Assert.Equal(59, expected.Length);
+        Assert.Equal(62, expected.Length);
         Assert.Equal(expected, FunctionRegistry.CreateDefault().Functions.Keys.OrderBy(n => n, StringComparer.Ordinal).ToArray());
     }
 
