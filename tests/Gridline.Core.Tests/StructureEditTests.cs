@@ -15,7 +15,7 @@ public class StructureEditTests
     [Fact] public void InsertRows_RefOverflow() { var wb = new Workbook(); wb.SetCell("A1","=A99999+SUM(B99990:B100000)"); wb.InsertRows(2, 5); Assert.Equal("=#REF!+SUM(B99995:B100000)", wb.GetInput("A1")); }
     [Fact] public void ArgValidation() { var wb = new Workbook(); Assert.Throws<ArgumentOutOfRangeException>(() => wb.InsertRows(0, 1)); Assert.Throws<ArgumentOutOfRangeException>(() => wb.InsertRows(1, 0)); Assert.Throws<ArgumentOutOfRangeException>(() => wb.DeleteRows(99999, 3)); Assert.Throws<ArgumentOutOfRangeException>(() => wb.DeleteColumns(703, 1)); }
     [Fact] public void DeleteRows_UndoRestoresVerbatimAndNames() { var wb = new Workbook(); wb.SetCell("A3","= a1 + 1"); wb.DefineName("R","$A$1"); wb.DeleteRows(1, 1); Assert.Equal("=#REF!+1", wb.GetInput("A2")); wb.Undo(); Assert.Equal("= a1 + 1", wb.GetInput("A3")); Assert.Equal("$A$1", wb.GetNames()[0].Value); }
-    [Fact(Skip = "needs Task 4")] public void Row_ReflectsMove() { var wb = new Workbook(); wb.SetCell("A2","=ROW()"); wb.InsertRows(1, 3); Assert.Equal("N:5", wb.GetValue("A5").ToCanonicalString()); }
+    [Fact] public void Row_ReflectsMove() { var wb = new Workbook(); wb.SetCell("A2","=ROW()"); wb.InsertRows(1, 3); Assert.Equal("N:5", wb.GetValue("A5").ToCanonicalString()); }
 
     // ---- additional coverage ----
 

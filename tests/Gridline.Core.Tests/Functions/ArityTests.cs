@@ -27,6 +27,9 @@ public class ArityTests
         { "PROPER", 1, 1 }, { "TRIM", 1, 1 }, { "CONCAT", 1, V }, { "TEXTJOIN", 3, V }, { "FIND", 2, 3 },
         { "SEARCH", 2, 3 }, { "SUBSTITUTE", 3, 4 }, { "REPLACE", 4, 4 }, { "REPT", 2, 2 }, { "EXACT", 2, 2 },
         { "VALUE", 1, 1 },
+        // §7.4 Lookup and reference — 9
+        { "VLOOKUP", 3, 4 }, { "HLOOKUP", 3, 4 }, { "INDEX", 2, 3 }, { "MATCH", 2, 3 }, { "CHOOSE", 2, V },
+        { "ROW", 0, 1 }, { "COLUMN", 0, 1 }, { "ROWS", 1, 1 }, { "COLUMNS", 1, 1 },
     };
 
     private static string Call(string name, int argCount) =>
@@ -51,10 +54,10 @@ public class ArityTests
     }
 
     [Fact]
-    public void Registry_HasExactlyThePhase1Functions()
+    public void Registry_HasExactlyTheSpecFunctions()
     {
         var expected = SpecArities.Select(row => (string)row[0]).OrderBy(n => n, StringComparer.Ordinal).ToArray();
-        Assert.Equal(50, expected.Length);
+        Assert.Equal(59, expected.Length);
         Assert.Equal(expected, FunctionRegistry.CreateDefault().Functions.Keys.OrderBy(n => n, StringComparer.Ordinal).ToArray());
     }
 
