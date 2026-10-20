@@ -67,11 +67,11 @@
                 <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
             <local:GridControl x:Name="Sheet" AutomationProperties.AutomationId="Grid" />
-            <!-- In-cell editor overlay: offset by the header sizes and clipped to the cell area; a null
+            <!-- In-cell editor overlay: offset by the header sizes (set from GridControl constants in code) and clipped to the cell area; a null
                  Canvas background lets clicks fall through to the grid. -->
-            <Canvas x:Name="EditorLayer" Margin="56,22,0,0" ClipToBounds="True">
+            <Canvas x:Name="EditorLayer" ClipToBounds="True">
                 <TextBox x:Name="CellEditor" Visibility="Collapsed" MaxLength="32767"
-                         Width="80" Height="22" Padding="1,0" BorderThickness="2" BorderBrush="#217346"
+                         Padding="1,0" BorderThickness="2" BorderBrush="#217346"
                          FontFamily="Segoe UI" FontSize="12" VerticalContentAlignment="Center"
                          AutomationProperties.AutomationId="CellEditor"
                          PreviewKeyDown="OnEditorKeyDown" LostKeyboardFocus="OnEditorLostFocus"

@@ -19,6 +19,10 @@ public partial class MainWindow : Window
     {
         _session = session;
         InitializeComponent();
+        // The editor overlay follows the grid's layout constants.
+        EditorLayer.Margin = new Thickness(GridControl.RowHeaderWidth, GridControl.HeaderHeight, 0, 0);
+        CellEditor.Width = GridControl.ColumnWidth;
+        CellEditor.Height = GridControl.RowHeight;
         _controller = new SheetController(Sheet.Selection) { Workbook = _session.Workbook };
         Sheet.Workbook = _session.Workbook;
         Title = _session.Title;
@@ -94,18 +98,31 @@ public partial class MainWindow : Window
         CellEditor.CaretIndex = text.Length;
     }
 
-    private void EndEdit(bool commit, int dRow = 0, int dCol = 0)
+    /// <summary>
+    /// Ends the in-cell edit. <paramref name="refocusGrid"/> is true for Enter/Tab/Esc and commands; it is false when
+    /// the edit ends because focus already moved elsewhere, so the element the user clicked keeps focus.
+    /// </summary>
+    private void EndEdit(bool commit, int dRow = 0, int dCol = 0, bool refocusGrid = true)
     {
         if (!_controller.IsEditing) return;
-        if (commit) _controller.CommitEdit(CellEditor.Text, dRow, dCol);
+        if (commit)
+        {
+            try { _controller.CommitEdit(CellEditor.Text, dRow, dCol); }
+            catch (ArgumentException ex)
+            {
+                // The controller keeps the edit open; nothing was applied.
+                MessageBox.Show(this, ex.Message, "Gridline", MessageBoxButton.OK, MessageBoxImage.Error);
+                return;
+            }
+        }
         else _controller.CancelEdit();
-        HideEditor();
+        HideEditor(refocusGrid);
         RefreshBars();
     }
 
-    private void HideEditor()
+    private void HideEditor(bool refocusGrid = true)
     {
-        if (CellEditor.IsKeyboardFocusWithin) Sheet.Focus();
+        if (refocusGrid && CellEditor.IsKeyboardFocusWithin) Sheet.Focus();
         CellEditor.Visibility = Visibility.Collapsed;
     }
 
@@ -127,7 +144,7 @@ public partial class MainWindow : Window
     /// <summary>Losing focus inside the window (e.g. clicking another cell) commits; window deactivation keeps the edit open.</summary>
     private void OnEditorLostFocus(object sender, KeyboardFocusChangedEventArgs e)
     {
-        if (e.NewFocus is not null) EndEdit(commit: true);
+        if (e.NewFocus is not null) EndEdit(commit: true, refocusGrid: false);
     }
 
     private void OnEditorTextChanged(object sender, TextChangedEventArgs e)

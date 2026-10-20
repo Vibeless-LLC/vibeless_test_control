@@ -10,11 +10,10 @@ namespace Gridline.App;
 /// </summary>
 public sealed class SheetController
 {
-    /// <summary>Ranges up to this many positions are scanned cell by cell; larger ones scan the used cells.</summary>
+    /// <summary>Ranges up to this many positions are scanned cell by cell; larger ones filter <see cref="Workbook.GetUsedAddresses"/>.</summary>
     public const int PositionalScanLimit = 4096;
 
     private Workbook? _workbook;
-    private List<(CellAddress Address, string Text)>? _used; // row-major; rebuilt lazily after a change
 
     public SheetController(GridSelection selection)
     {
@@ -30,10 +29,7 @@ public sealed class SheetController
         set
         {
             if (ReferenceEquals(_workbook, value)) return;
-            if (_workbook is not null) _workbook.CellsChanged -= OnCellsChanged;
             _workbook = value;
-            if (_workbook is not null) _workbook.CellsChanged += OnCellsChanged;
-            _used = null;
             IsEditing = false;
         }
     }
@@ -57,7 +53,12 @@ public sealed class SheetController
     {
         if (!IsEditing) return;
         IsEditing = false;
-        _workbook?.SetCell(EditAddress.ToString(), text);
+        try { _workbook?.SetCell(EditAddress.ToString(), text); }
+        catch
+        {
+            IsEditing = true; // the edit stays open; nothing was applied
+            throw;
+        }
         if (dRow != 0 || dCol != 0) Selection.MoveBy(dRow, dCol, extend: false);
     }
 
@@ -120,18 +121,8 @@ public sealed class SheetController
             yield break;
         }
 
-        _used ??= BuildUsed(wb);
-        foreach (var (a, text) in _used)
-            if (range.Contains(a)) yield return text;
+        // Queried fresh on every read (no cache), so results never depend on CellsChanged handler order.
+        foreach (string text in wb.GetUsedAddresses())
+            if (range.Contains(CellAddress.Parse(text))) yield return text;
     }
-
-    private static List<(CellAddress, string)> BuildUsed(Workbook wb)
-    {
-        var all = wb.GetUsedAddresses();
-        var list = new List<(CellAddress, string)>(all.Count);
-        foreach (var s in all) list.Add((CellAddress.Parse(s), s));
-        return list;
-    }
-
-    private void OnCellsChanged(object? sender, CellsChangedEventArgs e) => _used = null;
 }

@@ -213,4 +213,40 @@ public class SheetControllerTests
         w.SetCell("A2", "1"); // old workbook no longer observed
         Assert.Equal("7", c.SelectionSumText);
     }
+
+    [Fact]
+    public void Sum_LargeSelection_FreshForReadersSubscribedBeforeController()
+    {
+        // DocumentSession subscribes to CellsChanged before the controller exists, as in MainWindow.
+        var session = new DocumentSession();
+        var c = new SheetController(new GridSelection()) { Workbook = session.Workbook };
+        var seen = new List<string>();
+        session.StateChanged += (_, _) => seen.Add(c.SelectionSumText);
+        c.Selection.MoveTo(CellAddress.Parse("A1"), false);
+        c.Selection.MoveTo(CellAddress.Parse("C2000"), true); // 6,000 positions: used-address path
+        Assert.True(c.Selection.Range.Rows * c.Selection.Range.Cols > SheetController.PositionalScanLimit);
+        Assert.Equal("0", c.SelectionSumText);
+
+        session.Workbook.SetCell("B1500", "7"); // previously blank cell inside the selection
+        Assert.Equal("7", seen[^1]);
+        session.Workbook.SetCell("A10", "3");
+        Assert.Equal("10", seen[^1]);
+        session.Workbook.Undo();
+        Assert.Equal("7", seen[^1]);
+        c.ClearSelection();
+        Assert.Equal("0", seen[^1]);
+    }
+
+    [Fact]
+    public void CommitEdit_Throwing_KeepsEditOpen()
+    {
+        var (c, w) = Make();
+        c.BeginEdit("x");
+        Assert.Throws<ArgumentException>(() => c.CommitEdit(new string('a', Workbook.MaxInputLength + 1), 1, 0));
+        Assert.True(c.IsEditing);
+        Assert.Equal("A1", c.Selection.Active.ToString());
+        Assert.Equal("", w.GetInput("A1"));
+        c.CommitEdit("ok");
+        Assert.Equal("ok", w.GetInput("A1"));
+    }
 }
