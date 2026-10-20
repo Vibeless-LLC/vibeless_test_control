@@ -35,8 +35,16 @@ public sealed class AppFixture : IDisposable
 
         SinceStart = Stopwatch.StartNew();
         _process = Process.Start(psi) ?? throw new InvalidOperationException("Could not start Gridline.App.exe");
-        App = Application.Attach(_process);
-        if (waitForMainWindow) MainWindow = WaitForMainWindow();
+        try
+        {
+            App = Application.Attach(_process);
+            if (waitForMainWindow) MainWindow = WaitForMainWindow();
+        }
+        catch
+        {
+            Cleanup(); // the constructor failed, so the caller's using never disposes this fixture
+            throw;
+        }
     }
 
     /// <summary>Gridline.App.exe is copied next to the test assembly by the project reference (Debug and Release).</summary>
@@ -151,7 +159,9 @@ public sealed class AppFixture : IDisposable
         FocusGrid();
     }
 
-    public void Dispose()
+    public void Dispose() => Cleanup();
+
+    private void Cleanup()
     {
         try { if (!_process.HasExited) _process.Kill(entireProcessTree: true); _process.WaitForExit(5000); } catch (Exception) { }
         try { _automation.Dispose(); } catch (Exception) { }

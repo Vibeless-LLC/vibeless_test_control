@@ -16,6 +16,11 @@ public class RecoveryUiTests
                                         ?? app.Desktop.FindFirstChild(c => c.ByAutomationId("RecoveryDialog")),
             TimeSpan.FromSeconds(15), TimeSpan.FromMilliseconds(100)).Result;
         Assert.NotNull(dlg);
+        var restore = Retry.WhileNull(() => dlg!.FindFirstDescendant(c => c.ByAutomationId("RestoreButton")),
+            TimeSpan.FromSeconds(5)).Result;
+        Assert.NotNull(restore);
+        Assert.True(restore!.IsEnabled);
+        Assert.NotNull(dlg!.FindFirstDescendant(c => c.ByAutomationId("DiscardButton")));
     }
 
     [Fact]

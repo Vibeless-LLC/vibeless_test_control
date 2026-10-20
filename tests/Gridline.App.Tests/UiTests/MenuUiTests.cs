@@ -31,7 +31,7 @@ public class MenuUiTests
         app.SetCell("A1", "7", "N:7");
 
         InvokeEditItem(app, "MenuUndo");
-        app.WaitText("SelectionValue", t => !t.StartsWith("N:", StringComparison.Ordinal), "A1 not a number after undo");
+        app.WaitText("SelectionValue", t => t == "BLANK", "BLANK after undo");
         app.WaitTitle("Gridline - Untitled");
 
         InvokeEditItem(app, "MenuRedo");

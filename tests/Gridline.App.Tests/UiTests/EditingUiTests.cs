@@ -74,6 +74,28 @@ public class EditingUiTests
     }
 
     [Fact]
+    public void Escape_CancelsEdit_F2_EditsExistingInput()
+    {
+        using var app = new AppFixture();
+        app.GoTo("A1");
+        Keyboard.Type("9");
+        app.WaitText("CellEditor", t => t == "9", "editor open with 9");
+        Keyboard.Press(VirtualKeyShort.ESCAPE);
+        Keyboard.Release(VirtualKeyShort.ESCAPE);
+        app.WaitTitle("Gridline - Untitled");
+        app.WaitText("SelectionValue", t => t == "BLANK", "BLANK after Esc");
+
+        app.SetCell("A1", "5", "N:5");
+        Keyboard.Press(VirtualKeyShort.F2);
+        Keyboard.Release(VirtualKeyShort.F2);
+        app.WaitText("CellEditor", t => t == "5", "editor holding existing input 5");
+        Keyboard.Type("6"); // F2 puts the caret at the end
+        AppFixture.PressEnter();
+        app.GoTo("A1");
+        app.WaitText("SelectionValue", t => t == "N:56", "N:56");
+    }
+
+    [Fact]
     public void Delete_ClearsSelection_OneUndo()
     {
         using var app = new AppFixture();

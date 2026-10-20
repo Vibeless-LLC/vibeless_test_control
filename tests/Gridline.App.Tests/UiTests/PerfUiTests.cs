@@ -46,11 +46,12 @@ public class PerfUiTests(ITestOutputHelper output)
                 times.Add(app.SinceStart.Elapsed.TotalSeconds);
                 app.WaitTitle("Gridline - p6.gridline");
             }
+            var runs = string.Join(", ", times.Select(t => t.ToString("F3", CultureInfo.InvariantCulture)));
             times.Sort();
-            string msg = "P-6 runs (s, sorted): " + string.Join(", ", times.Select(t => t.ToString("F3", CultureInfo.InvariantCulture))) +
+            string msg = "P-6 runs (s, in order): " + runs + " | max " + times[2].ToString("F3", CultureInfo.InvariantCulture) +
                          "; median " + times[1].ToString("F3", CultureInfo.InvariantCulture);
             output.WriteLine(msg);
-            Assert.True(times[1] <= 3.0, msg);
+            Assert.True(times[1] <= 3.0 && times[2] <= 3.0, msg); // median per brief; max asserted too
         }
         finally { try { Directory.Delete(dir, true); } catch (Exception) { } }
     }
