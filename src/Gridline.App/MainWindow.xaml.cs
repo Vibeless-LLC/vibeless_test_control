@@ -9,9 +9,10 @@ namespace Gridline.App;
 
 public partial class MainWindow : Window
 {
-    private const string FileFilter = "Gridline files (*.gridline)|*.gridline|All files (*.*)|*.*";
+    private const string FileFilter = "Gridline (*.gridline)|*.gridline";
     private readonly DocumentSession _session;
     private readonly SheetController _controller;
+    private readonly DocumentLifecycle _lifecycle;
 
     public MainWindow() : this(new DocumentSession()) { }
 
@@ -19,6 +20,8 @@ public partial class MainWindow : Window
     {
         _session = session;
         InitializeComponent();
+        _lifecycle = new DocumentLifecycle(_session, new WindowPrompt(this), PickSavePath, PickOpenPath, ShowError);
+        Closing += OnWindowClosing;
         // The editor overlay follows the grid's layout constants.
         EditorLayer.Margin = new Thickness(GridControl.RowHeaderWidth, GridControl.HeaderHeight, 0, 0);
         CellEditor.Width = GridControl.ColumnWidth;
@@ -189,28 +192,34 @@ public partial class MainWindow : Window
 
     // ---- Commands ----
 
-    private void OnNew(object s, ExecutedRoutedEventArgs e) => _session.New();
+    private void OnNew(object s, ExecutedRoutedEventArgs e) { EndEdit(commit: true); _lifecycle.New(); }
 
-    private void OnOpen(object s, ExecutedRoutedEventArgs e)
+    private void OnOpen(object s, ExecutedRoutedEventArgs e) { EndEdit(commit: true); _lifecycle.Open(); }
+
+    private void OnSave(object s, ExecutedRoutedEventArgs e) { EndEdit(commit: true); _lifecycle.Save(); }
+
+    private void OnSaveAs(object s, ExecutedRoutedEventArgs e) { EndEdit(commit: true); _lifecycle.SaveAs(); }
+
+    private string? PickSavePath()
+    {
+        var dlg = new SaveFileDialog { Filter = FileFilter, DefaultExt = ".gridline" };
+        return dlg.ShowDialog(this) == true ? dlg.FileName : null;
+    }
+
+    private string? PickOpenPath()
     {
         var dlg = new OpenFileDialog { Filter = FileFilter };
-        if (dlg.ShowDialog(this) != true) return;
-        Report(_session.TryOpen(dlg.FileName, out var err), err);
+        return dlg.ShowDialog(this) == true ? dlg.FileName : null;
     }
 
-    private void OnSave(object s, ExecutedRoutedEventArgs e)
-    {
-        EndEdit(commit: true);
-        if (_session.FilePath is null) OnSaveAs(s, e);
-        else Report(_session.TrySave(out var err), err);
-    }
+    private void ShowError(string message) =>
+        MessageBox.Show(this, message, "Gridline", MessageBoxButton.OK, MessageBoxImage.Error);
 
-    private void OnSaveAs(object s, ExecutedRoutedEventArgs e)
+    /// <summary>The window close button and File > Exit both land here (§11.5).</summary>
+    private void OnWindowClosing(object? sender, System.ComponentModel.CancelEventArgs e)
     {
         EndEdit(commit: true);
-        var dlg = new SaveFileDialog { Filter = FileFilter, DefaultExt = ".gridline" };
-        if (dlg.ShowDialog(this) != true) return;
-        Report(_session.TrySaveAs(dlg.FileName, out var err), err);
+        if (_controller.IsEditing || !_lifecycle.Exit()) e.Cancel = true;
     }
 
     // Ctrl+Z/Ctrl+Y reach the window's Undo/Redo bindings only when the grid (not a TextBox) has focus: a focused
@@ -231,9 +240,10 @@ public partial class MainWindow : Window
     private void CanUndo(object s, CanExecuteRoutedEventArgs e) => e.CanExecute = _session.Workbook.CanUndo;
     private void CanRedo(object s, CanExecuteRoutedEventArgs e) => e.CanExecute = _session.Workbook.CanRedo;
     private void OnExit(object s, ExecutedRoutedEventArgs e) => Close();
+}
 
-    private void Report(bool ok, string? error)
-    {
-        if (!ok) MessageBox.Show(this, error, "Gridline", MessageBoxButton.OK, MessageBoxImage.Error);
-    }
+/// <summary>Creates a fresh modal dialog per prompt.</summary>
+internal sealed class WindowPrompt(Window owner) : IUnsavedChangesPrompt
+{
+    public UnsavedChoice Ask(string documentName) => new UnsavedChangesDialog(owner).Ask(documentName);
 }

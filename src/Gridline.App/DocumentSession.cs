@@ -22,9 +22,13 @@ public sealed class DocumentSession
 
     public string? FilePath => _filePath;
 
-    public string Title =>
-        "Gridline - " + (_filePath is null ? "Untitled" : Path.GetFileName(_filePath)) +
-        (_workbook.IsDirty ? " *" : "");
+    /// <summary>File name, or "Untitled".</summary>
+    public string DocumentName => _filePath is null ? "Untitled" : Path.GetFileName(_filePath);
+
+    /// <summary>True when the workbook has unsaved changes.</summary>
+    public bool IsDirty => _workbook.IsDirty;
+
+    public string Title => "Gridline - " + DocumentName + (IsDirty ? " *" : "");
 
     /// <summary>Raised on any dirty, title or workbook change.</summary>
     public event EventHandler? StateChanged;
