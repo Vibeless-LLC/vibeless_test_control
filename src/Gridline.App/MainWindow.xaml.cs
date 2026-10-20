@@ -15,6 +15,7 @@ public partial class MainWindow : Window
     private readonly DocumentLifecycle _lifecycle;
 
     private readonly RecoveryService? _recovery;
+    private bool _autosaveFailed;
     private readonly System.Windows.Threading.DispatcherTimer? _autosaveTimer;
 
     public MainWindow() : this(new DocumentSession()) { }
@@ -42,7 +43,7 @@ public partial class MainWindow : Window
             _autosaveTimer = new System.Windows.Threading.DispatcherTimer { Interval = autosaveInterval ?? TimeSpan.FromSeconds(60) };
             _autosaveTimer.Tick += (_, _) => Autosave();
             _autosaveTimer.Start();
-            Closed += (_, _) => { _autosaveTimer.Stop(); _recovery.Delete(); }; // Closed only follows a non-cancelled close
+            Closed += (_, _) => { _autosaveTimer.Stop(); _recovery.Delete(); _recovery.Dispose(); }; // Closed only follows a non-cancelled close
         }
 
         Sheet.ViewportChanged += (_, _) => OnViewportChanged();
@@ -57,19 +58,34 @@ public partial class MainWindow : Window
 
     private void Autosave()
     {
-        try { _recovery?.AutosaveIfDirty(_session); }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { } // retry on the next tick
+        try
+        {
+            _recovery?.AutosaveIfDirty(_session);
+            if (_autosaveFailed) { _autosaveFailed = false; AutosaveStatus.Text = ""; }
+        }
+        catch (Exception)
+        {
+            // Never throw out of the timer tick; tell the user once in the status bar and retry on the next tick.
+            if (!_autosaveFailed) { _autosaveFailed = true; AutosaveStatus.Text = "Autosave failed"; }
+        }
     }
 
     /// <summary>Offers each recovery file left by an earlier session (§11.6); call once the window is shown.</summary>
     public void OfferRecovery()
     {
         if (_recovery is null) return;
-        var files = _recovery.FindRecoveryFiles();
-        if (files.Count == 0) return;
-        var dlg = new RecoveryDialog(files, Restore, RecoveryService.DeleteFile) { Owner = this };
-        dlg.ShowDialog();
-        Sheet.Focus();
+        try
+        {
+            var files = _recovery.FindRecoveryFiles();
+            if (files.Count == 0) return;
+            var dlg = new RecoveryDialog(files, Restore, RecoveryService.DeleteFile) { Owner = this };
+            dlg.ShowDialog();
+            Sheet.Focus();
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            AutosaveStatus.Text = "Recovery unavailable";
+        }
     }
 
     private string? Restore(string path)
@@ -78,6 +94,7 @@ public partial class MainWindow : Window
         if (!_lifecycle.ConfirmDiscard()) return "Restore cancelled.";
         if (!_session.TryOpenRecovered(path, out var error)) return error;
         RecoveryService.DeleteFile(path);
+        Autosave(); // this session's own recovery file replaces the one just deleted
         return null;
     }
 
@@ -233,13 +250,20 @@ public partial class MainWindow : Window
 
     // ---- Commands ----
 
-    private void OnNew(object s, ExecutedRoutedEventArgs e) { EndEdit(commit: true); _lifecycle.New(); }
+    private void OnNew(object s, ExecutedRoutedEventArgs e) { if (CommitPending()) _lifecycle.New(); }
 
-    private void OnOpen(object s, ExecutedRoutedEventArgs e) { EndEdit(commit: true); _lifecycle.Open(); }
+    private void OnOpen(object s, ExecutedRoutedEventArgs e) { if (CommitPending()) _lifecycle.Open(); }
 
-    private void OnSave(object s, ExecutedRoutedEventArgs e) { EndEdit(commit: true); _lifecycle.Save(); }
+    private void OnSave(object s, ExecutedRoutedEventArgs e) { if (CommitPending()) _lifecycle.Save(); }
 
-    private void OnSaveAs(object s, ExecutedRoutedEventArgs e) { EndEdit(commit: true); _lifecycle.SaveAs(); }
+    private void OnSaveAs(object s, ExecutedRoutedEventArgs e) { if (CommitPending()) _lifecycle.SaveAs(); }
+
+    /// <summary>Commits an open in-cell edit; false (and the edit stays open) if the commit failed.</summary>
+    private bool CommitPending()
+    {
+        EndEdit(commit: true);
+        return !_controller.IsEditing;
+    }
 
     private string? PickSavePath()
     {
@@ -259,8 +283,7 @@ public partial class MainWindow : Window
     /// <summary>The window close button and File > Exit both land here (§11.5).</summary>
     private void OnWindowClosing(object? sender, System.ComponentModel.CancelEventArgs e)
     {
-        EndEdit(commit: true);
-        if (_controller.IsEditing || !_lifecycle.Exit()) e.Cancel = true;
+        if (!CommitPending() || !_lifecycle.Exit()) e.Cancel = true;
     }
 
     // Ctrl+Z/Ctrl+Y reach the window's Undo/Redo bindings only when the grid (not a TextBox) has focus: a focused

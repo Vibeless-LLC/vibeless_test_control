@@ -36,12 +36,53 @@ public class RecoveryServiceTests : IDisposable
     [Fact]
     public void Find_ExcludesOwnFile()
     {
-        var a = new RecoveryService(_dir, Guid.NewGuid());
+        using var a = new RecoveryService(_dir, Guid.NewGuid());
         var b = new RecoveryService(_dir, Guid.NewGuid());
         a.AutosaveIfDirty(Dirty());
         b.AutosaveIfDirty(Dirty());
+        b.Dispose(); // b's lock is released (crashed); a's own file is still never listed for a
         Assert.Equal([b.RecoveryPath], a.FindRecoveryFiles());
+    }
+
+    [Fact]
+    public void Find_SkipsLiveInstance_ButOffersAfterLockReleased()
+    {
+        using var a = new RecoveryService(_dir, Guid.NewGuid());
+        using var b = new RecoveryService(_dir, Guid.NewGuid());
+        a.AutosaveIfDirty(Dirty());
+        Assert.True(File.Exists(a.RecoveryPath));
+        Assert.Empty(b.FindRecoveryFiles());
+        a.Dispose(); // simulates a crash: .gridline stays, lock released
         Assert.Equal([a.RecoveryPath], b.FindRecoveryFiles());
+    }
+
+    [Fact]
+    public void Find_RemovesStaleLockFiles()
+    {
+        Directory.CreateDirectory(_dir);
+        var stale = Path.Combine(_dir, Guid.NewGuid().ToString("D") + ".lock");
+        File.WriteAllText(stale, "");
+        using var b = new RecoveryService(_dir, Guid.NewGuid());
+        Assert.Empty(b.FindRecoveryFiles());
+        Assert.False(File.Exists(stale));
+    }
+
+    [Fact]
+    public void Dispose_DeletesLock()
+    {
+        var a = new RecoveryService(_dir, Guid.NewGuid());
+        a.AutosaveIfDirty(Dirty());
+        Assert.True(File.Exists(a.LockPath));
+        a.Dispose();
+        Assert.False(File.Exists(a.LockPath));
+    }
+
+    [Fact]
+    public void InvalidDirectory_FindIsEmpty_AutosaveMayThrowButFindDoesNot()
+    {
+        using var svc = new RecoveryService("Z:/no/such|dir<>?*", Guid.NewGuid());
+        Assert.Empty(svc.FindRecoveryFiles());
+        svc.Dispose();
     }
 
     [Fact]

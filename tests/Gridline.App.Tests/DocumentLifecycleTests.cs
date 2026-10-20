@@ -57,6 +57,23 @@ public class DocumentLifecycleTests : IDisposable
     }
 
     [Fact]
+    public void Dirty_DontSave_Exit_Proceeds()
+    {
+        var h = new Harness(UnsavedChoice.DontSave);
+        h.Session.Workbook.SetCell("A1", "1");
+        Assert.True(h.Life.Exit());
+        Assert.Equal(1, h.Prompt.Asked);
+    }
+
+    [Fact]
+    public void Dirty_Cancel_Exit_Aborts()
+    {
+        var h = new Harness(UnsavedChoice.Cancel);
+        h.Session.Workbook.SetCell("A1", "1");
+        Assert.False(h.Life.Exit());
+    }
+
+    [Fact]
     public void Dirty_Save_Untitled_UsesSaveAs_ThenProceeds()
     {
         var h = new Harness(UnsavedChoice.Save);
