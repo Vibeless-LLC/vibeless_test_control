@@ -8,10 +8,11 @@ using Gridline.Core.Parsing;
 namespace Gridline.Core;
 
 /// <summary>
-/// A single-sheet workbook (§9.1). Stores cell inputs (§4.3), keeps the static dependency graph (§6.1) and
-/// recalculates incrementally and synchronously on every mutation (§6.7, §9.2). Not thread-safe.
+/// A workbook of 1–255 ordered sheets (§9.1, CR1.1). Stores cell inputs (§4.3) per sheet, keeps the static
+/// dependency graph over global keys (§6.1, CR1.2) and recalculates incrementally and synchronously on every
+/// mutation (§6.7, §9.2). Not thread-safe. Sheet members live in <c>Workbook.Sheets.cs</c>.
 /// </summary>
-public sealed class Workbook
+public sealed partial class Workbook
 {
     public const int MaxRows = 100_000;
     public const int MaxColumns = 702;
@@ -20,17 +21,13 @@ public sealed class Workbook
 
     private static readonly CellValue Circ = CellValue.FromError(ErrorCodes.Circ);
 
-    /// <summary>The single sheet's id and name until sheets are added (CR1.1, CR1.2).</summary>
-    private const int SheetId = 0;
-    private const string SheetName = "Sheet1";
-
     /// <summary>
-    /// A defined name (§9.6): its defined casing, canonical <c>refersTo</c>, and target (null when
-    /// <c>refersTo</c> is <c>#REF!</c>).
+    /// A defined name (§9.6, CR1.4): its defined casing, the sheet id and target (both null when <c>refersTo</c>
+    /// is <c>#REF!</c>), and whether it keeps the range form. Its <c>refersTo</c> text is formatted on demand from
+    /// the sheet's current name.
     /// </summary>
-    private readonly record struct NameDef(string Name, string RefersTo, RangeAddress? Target, bool IsRange);
+    private readonly record struct NameDef(string Name, int? SheetId, RangeAddress? Target, bool IsRange);
 
-    private readonly CellStore _store = new();
     private readonly DependencyGraph _graph = new();
     private readonly RecalcPlanner _planner;
     private readonly FunctionArityAdapter _arity;
@@ -48,17 +45,11 @@ public sealed class Workbook
         _arity = new FunctionArityAdapter(registry);
         _evaluator = new Evaluator(registry.Functions);
         _planner = new RecalcPlanner(_graph);
-        _ctx = new EvalContext(_store, _names);
+        _ctx = new EvalContext(this);
         _isFormula = IsFormula;
         _resolveSheet = ResolveSheet;
+        InstallInitialSheet(DefaultSheetName);
     }
-
-    /// <summary>Sheet id for a sheet name as written in a formula (case-insensitive), or null if there is no such sheet (CR1.2).</summary>
-    private static int? ResolveSheet(string name) =>
-        string.Equals(name, SheetName, StringComparison.OrdinalIgnoreCase) ? SheetId : null;
-
-    /// <summary>Global key (CR1.2) of a cell key on the single sheet.</summary>
-    private static long G(int cellKey) => GlobalKey.Of(SheetId, cellKey);
 
     /// <summary>Statistics of the most recent mutating call or load (§9.2).</summary>
     public RecalcStats LastRecalc { get; private set; }
@@ -70,40 +61,41 @@ public sealed class Workbook
     /// Builds a workbook from cell inputs and defined names, then runs a full recalc (§6.7 "Load"). No event is
     /// raised. Throws <see cref="ArgumentException"/> on an invalid or duplicate (case-insensitive) address, an input
     /// over <see cref="MaxInputLength"/>, an invalid or duplicate (case-insensitive) name, or an invalid
-    /// <c>refersTo</c> (§9.6: a fully absolute cell or range, or <c>#REF!</c>).
+    /// <c>refersTo</c> (§9.6: a fully absolute cell or range, or <c>#REF!</c>). The workbook has one sheet,
+    /// <c>Sheet1</c>; a <c>refersTo</c> may be unqualified or qualified with that sheet (CR1.4).
     /// </summary>
     public static Workbook FromSnapshot(IReadOnlyList<KeyValuePair<string, string>> cells, IReadOnlyList<KeyValuePair<string, string>> names)
     {
         ArgumentNullException.ThrowIfNull(cells);
         ArgumentNullException.ThrowIfNull(names);
 
-        // Validate everything before building anything.
+        // One sheet, Sheet1 (CR1.4: unqualified or qualified refersTo). Validate everything before building anything.
+        var wb = new Workbook();
         var defs = new NameDef[names.Count];
         var seenNames = new HashSet<string>(names.Count, StringComparer.OrdinalIgnoreCase);
         for (int i = 0; i < names.Count; i++)
         {
             var (name, refersTo) = names[i];
-            defs[i] = ParseName(name, refersTo, nameof(names));
+            defs[i] = wb.ParseName(name, refersTo, nameof(names));
             if (!seenNames.Add(name)) throw new ArgumentException($"Duplicate name: '{name}'", nameof(names));
         }
 
-        var keys = new int[cells.Count];
-        var seen = new HashSet<int>(cells.Count);
+        var keys = new long[cells.Count];
+        var seen = new HashSet<long>(cells.Count);
         for (int i = 0; i < cells.Count; i++)
         {
             var (address, input) = cells[i];
-            int key = ParseKey(address, nameof(cells));
+            long key = wb.ParseCell(address, nameof(cells));
             ValidateInput(input, nameof(cells));
             if (!seen.Add(key)) throw new ArgumentException($"Duplicate cell address: '{address}'", nameof(cells));
             keys[i] = key;
         }
 
-        var wb = new Workbook();
         foreach (var d in defs) wb.AddName(d);
         var formulaKeys = new HashSet<long>();
         for (int i = 0; i < cells.Count; i++)
         {
-            long g = G(keys[i]);
+            long g = keys[i];
             wb.Apply(g, cells[i].Value);
             if (wb.IsFormula(g)) formulaKeys.Add(g);
         }
@@ -118,7 +110,7 @@ public sealed class Workbook
     /// </summary>
     public void SetCell(string address, string input)
     {
-        long key = G(ParseKey(address, nameof(address)));
+        long key = ParseCell(address, nameof(address));
         ValidateInput(input, nameof(input));
         string old = CurrentInput(key);
         if (string.Equals(old, input, StringComparison.Ordinal))
@@ -129,7 +121,7 @@ public sealed class Workbook
             Raise(valueChanged);
             return;
         }
-        Commit([new CellEdit(key, old, input)], newNames: null, record: true);
+        Commit([new CellEdit(key, old, input)], newNames: null, newSheets: null, record: true);
     }
 
     /// <summary>
@@ -143,7 +135,7 @@ public sealed class Workbook
         var keys = new long[edits.Count];
         for (int i = 0; i < edits.Count; i++)
         {
-            keys[i] = G(ParseKey(edits[i].Key, nameof(edits)));
+            keys[i] = ParseCell(edits[i].Key, nameof(edits));
             ValidateInput(edits[i].Value, nameof(edits));
         }
 
@@ -156,7 +148,7 @@ public sealed class Workbook
             if (slot.TryGetValue(keys[i], out int j)) list[j] = e;
             else { slot[keys[i]] = list.Count; list.Add(e); }
         }
-        Commit(list, newNames: null, record: true);
+        Commit(list, newNames: null, newSheets: null, record: true);
     }
 
     /// <summary>
@@ -169,10 +161,13 @@ public sealed class Workbook
     /// </summary>
     public void CopyPaste(string sourceRange, string destinationTopLeft)
     {
-        if (!RangeAddress.TryParse(sourceRange, out var src))
+        if (!QualifiedAddress.TryParse(sourceRange, out var qsrc))
             throw new ArgumentException($"Invalid range: '{sourceRange}'", nameof(sourceRange));
-        if (!CellAddress.TryParse(destinationTopLeft, out var dst))
-            throw new ArgumentException($"Invalid cell address: '{destinationTopLeft}'", nameof(destinationTopLeft));
+        var srcSheet = SheetOrActive(qsrc.Sheet, nameof(sourceRange));
+        var src = qsrc.Range;
+        long dstKey = ParseCell(destinationTopLeft, nameof(destinationTopLeft));
+        int dstSheet = GlobalKey.Sheet(dstKey);
+        var dst = GlobalKey.Address(dstKey);
         int rows = src.Rows, cols = src.Cols;
         if ((long)dst.Row + rows - 1 > MaxRows || (long)dst.Col + cols - 1 > MaxColumns)
             throw new ArgumentException("Destination extends beyond the grid.", nameof(destinationTopLeft));
@@ -181,11 +176,12 @@ public sealed class Workbook
 
         // Sparse: cost is O(populated source cells + populated destination cells), never rows * cols.
         var pasted = new Dictionary<int, string>();
-        foreach (var (key, cell) in UsedIn(src))
+        // Each reference keeps its own sheet prefix: unqualified refs follow the destination sheet (CR1.3).
+        foreach (var (key, cell) in UsedIn(srcSheet.Store, src))
         {
             string text = cell.Input;
             if (cell.Kind == CellKind.Formula && cell.Formula is { IsParseError: false, Root: { } root })
-                text = FormulaPrinter.Print(ReferenceRewriter.Shift(root, dRow, dCol, out _), NameCasing);
+                text = FormulaPrinter.Print(ReferenceRewriter.Shift(root, dRow, dCol, out _), NameCasing, SheetCasing);
             // Re-emitted formulas can grow (shifted refs get longer, #REF!); keep the input-length invariant.
             if (text.Length > MaxInputLength)
                 throw new ArgumentException($"Pasted input exceeds {MaxInputLength} characters.", nameof(destinationTopLeft));
@@ -194,23 +190,27 @@ public sealed class Workbook
         }
 
         var dstRange = new RangeAddress(dst, new CellAddress(dst.Row + rows - 1, dst.Col + cols - 1));
-        foreach (var (key, _) in UsedIn(dstRange)) pasted.TryAdd(key, ""); // source blank clears populated destination
+        foreach (var (key, _) in UsedIn(_sheetsById[dstSheet].Store, dstRange)) pasted.TryAdd(key, ""); // source blank clears populated destination
 
         var keys = new int[pasted.Count];
         pasted.Keys.CopyTo(keys, 0);
         Array.Sort(keys); // row-major
         var edits = new List<CellEdit>(keys.Length);
-        foreach (int key in keys) edits.Add(new CellEdit(G(key), CurrentInput(G(key)), pasted[key]));
-        Commit(edits, newNames: null, record: true);
+        foreach (int key in keys)
+        {
+            long g = GlobalKey.Of(dstSheet, key);
+            edits.Add(new CellEdit(g, CurrentInput(g), pasted[key]));
+        }
+        Commit(edits, newNames: null, newSheets: null, record: true);
     }
 
     /// <summary>Populated cells inside <paramref name="range"/> via the per-column sorted lists (no per-position probing).</summary>
-    private List<(int Key, Cell Cell)> UsedIn(RangeAddress range)
+    private static List<(int Key, Cell Cell)> UsedIn(CellStore store, RangeAddress range)
     {
         var result = new List<(int, Cell)>();
         for (int c = range.TopLeft.Col; c <= range.BottomRight.Col; c++)
         {
-            var col = _store.GetColumn(c);
+            var col = store.GetColumn(c);
             if (col is null) continue;
             for (int i = col.LowerBound(range.TopLeft.Row); i < col.Rows.Count && col.Rows[i] <= range.BottomRight.Row; i++)
                 result.Add((new CellAddress(col.Rows[i], c).Key, col.Cells[i]));
@@ -272,7 +272,8 @@ public sealed class Workbook
     }
 
     /// <summary>
-    /// The insert/delete core (§9.5). Everything is computed and validated before anything changes: the new full
+    /// The insert/delete core (§9.5), on the active sheet (CR1.3; references from other sheets are adjusted from
+    /// CR-1 Task 5 on). Everything is computed and validated before anything changes: the new full
     /// cell map (moved cells keep their input verbatim unless they are non-parse-error formulas with a changed
     /// reference, which are re-emitted canonically per §5.5), its diff against the current map, and the adjusted
     /// names (a target that no longer exists becomes <c>#REF!</c>). Then one <see cref="Commit"/>, one step.
@@ -281,11 +282,16 @@ public sealed class Workbook
     {
         bool rows = e.Axis == Axis.Row;
         int max = rows ? MaxRows : MaxColumns;
-        if (e.IsInsert && InsertWouldOverflow(e, max))
+        var sheet = Active;
+        var store = sheet.Store;
+        int sid = sheet.Id;
+        if (e.IsInsert && InsertWouldOverflow(store, e, max))
             throw new InvalidOperationException($"Inserting would move cells with input past the last {(rows ? "row" : "column")}.");
 
-        var moved = new Dictionary<int, string>(_store.Count);
-        foreach (var (key, cell) in _store.All)
+        // On the sheet itself, unqualified refs and refs qualified with its own name move (CR1.3).
+        Func<string?, bool> applies = s => s is null || ResolveSheet(s) == sid;
+        var moved = new Dictionary<int, string>(store.Count);
+        foreach (var (key, cell) in store.All)
         {
             var a = CellAddress.FromKey(key);
             if (!StructuralShift.TryShiftIndex(rows ? a.Row : a.Col, e, max, out int nx)) continue; // deleted
@@ -293,10 +299,10 @@ public sealed class Workbook
             string text = cell.Input;
             if (cell.Kind == CellKind.Formula && cell.Formula is { IsParseError: false, Root: { } root })
             {
-                var rewritten = ReferenceRewriter.Structural(root, e, out bool changed);
+                var rewritten = ReferenceRewriter.Structural(root, e, applies, out bool changed);
                 if (changed)
                 {
-                    text = FormulaPrinter.Print(rewritten, NameCasing);
+                    text = FormulaPrinter.Print(rewritten, NameCasing, SheetCasing);
                     if (text.Length > MaxInputLength)
                         throw new InvalidOperationException($"A rewritten formula would exceed {MaxInputLength} characters (cell {a}).");
                 }
@@ -305,12 +311,13 @@ public sealed class Workbook
         }
 
         var edits = new List<CellEdit>(moved.Count * 2);
-        foreach (var (key, cell) in _store.All)
-            if (!moved.ContainsKey(key)) edits.Add(new CellEdit(G(key), cell.Input, ""));
+        foreach (var (key, cell) in store.All)
+            if (!moved.ContainsKey(key)) edits.Add(new CellEdit(GlobalKey.Of(sid, key), cell.Input, ""));
         foreach (var (key, text) in moved)
         {
-            string old = CurrentInput(G(key));
-            if (!string.Equals(old, text, StringComparison.Ordinal)) edits.Add(new CellEdit(G(key), old, text));
+            long g = GlobalKey.Of(sid, key);
+            string old = CurrentInput(g);
+            if (!string.Equals(old, text, StringComparison.Ordinal)) edits.Add(new CellEdit(g, old, text));
         }
         edits.Sort(static (x, y) => x.Key.CompareTo(y.Key)); // row-major, deterministic step contents
 
@@ -322,38 +329,38 @@ public sealed class Workbook
             for (int i = 0; i < current.Count; i++)
             {
                 var d = _names[current[i].Key];
-                list[i] = new(d.Name, ShiftRefersTo(d, e, max));
+                list[i] = new(d.Name, d.SheetId == sid ? ShiftRefersTo(d, sheet.Name, e, max) : current[i].Value);
             }
             names = list;
         }
-        Commit(edits, names, record: true);
+        Commit(edits, names, newSheets: null, record: true);
     }
 
     /// <summary>A name's adjusted <c>refersTo</c> (§9.6): same form (cell or range), or <c>#REF!</c> when its target is gone.</summary>
-    private static string ShiftRefersTo(NameDef d, StructuralEdit e, int max)
+    private static string ShiftRefersTo(NameDef d, string sheetName, StructuralEdit e, int max)
     {
         if (d.Target is not { } t) return ErrorCodes.Ref;
         int r0 = t.TopLeft.Row, r1 = t.BottomRight.Row, c0 = t.TopLeft.Col, c1 = t.BottomRight.Col;
         bool ok = e.Axis == Axis.Row
             ? StructuralShift.TryShiftSpan(r0, r1, e, max, out r0, out r1)
             : StructuralShift.TryShiftSpan(c0, c1, e, max, out c0, out c1);
-        return ok ? NameRules.FormatRefersTo(new RangeAddress(new CellAddress(r0, c0), new CellAddress(r1, c1)), d.IsRange) : ErrorCodes.Ref;
+        return ok ? NameRules.FormatRefersTo(sheetName, new RangeAddress(new CellAddress(r0, c0), new CellAddress(r1, c1)), d.IsRange) : ErrorCodes.Ref;
     }
 
     /// <summary>True when an insert would push a cell with input past the last row/column (checked per column, O(columns)).</summary>
-    private bool InsertWouldOverflow(StructuralEdit e, int max)
+    private static bool InsertWouldOverflow(CellStore store, StructuralEdit e, int max)
     {
         if (e.Axis == Axis.Row)
         {
             for (int c = 1; c <= MaxColumns; c++)
             {
-                int last = _store.LastRow(c);
+                int last = store.LastRow(c);
                 if (last >= e.At && last + (long)e.Count > max) return true;
             }
             return false;
         }
         for (int c = max; c >= e.At && c + (long)e.Count > max; c--)
-            if (_store.LastRow(c) > 0) return true;
+            if (store.LastRow(c) > 0) return true;
         return false;
     }
 
@@ -371,14 +378,14 @@ public sealed class Workbook
     /// <summary>Records the current history position as saved (§9.3).</summary>
     public void MarkSaved() => _history.MarkSaved();
 
-    /// <summary>Restores the exact inputs and names from before the most recent step; false if there is none.</summary>
+    /// <summary>Restores the exact inputs, names and sheet layout from before the most recent step; false if there is none.</summary>
     public bool Undo()
     {
         if (!_history.TryUndo(out var step)) return false;
         var edits = new CellEdit[step.Cells.Count];
         for (int i = 0; i < edits.Length; i++)
             edits[i] = new CellEdit(step.Cells[i].Key, CurrentInput(step.Cells[i].Key), step.Cells[i].OldInput);
-        Commit(edits, step.NamesBefore, record: false);
+        Commit(edits, step.NamesBefore, step.SheetsBefore, record: false);
         return true;
     }
 
@@ -389,13 +396,15 @@ public sealed class Workbook
         var edits = new CellEdit[step.Cells.Count];
         for (int i = 0; i < edits.Length; i++)
             edits[i] = new CellEdit(step.Cells[i].Key, CurrentInput(step.Cells[i].Key), step.Cells[i].NewInput);
-        Commit(edits, step.NamesAfter, record: false);
+        Commit(edits, step.NamesAfter, step.SheetsAfter, record: false);
         return true;
     }
 
     /// <summary>
-    /// Defines or redefines a name (§9.6) as one undo step. <paramref name="refersTo"/> must be a fully absolute cell
-    /// (<c>$B$1</c>) or range (<c>$A$1:$C$10</c>); its form is kept, so a 1x1 range stays a range. An existing name
+    /// Defines or redefines a name (§9.6, CR1.4) as one undo step. <paramref name="refersTo"/> must be a fully
+    /// absolute cell (<c>$B$1</c>) or range (<c>$A$1:$C$10</c>), optionally sheet-qualified (<c>Data!$B$1</c>); an
+    /// unqualified one is qualified with the active sheet and an unknown sheet throws. Its form is kept, so a 1x1
+    /// range stays a range. An existing name
     /// (case-insensitive) is replaced and takes the new casing. Identical casing and target is a no-op. Invalid
     /// name or <paramref name="refersTo"/> (including <c>#REF!</c>) throws <see cref="ArgumentException"/>.
     /// </summary>
@@ -407,8 +416,8 @@ public sealed class Workbook
         var d = ParseName(name, refersTo, nameof(name), nameof(refersTo));
         var list = new List<KeyValuePair<string, string>>(_names.Count + 1);
         foreach (var e in _names.Values)
-            if (!e.Name.Equals(d.Name, StringComparison.OrdinalIgnoreCase)) list.Add(new(e.Name, e.RefersTo));
-        list.Add(new(d.Name, d.RefersTo));
+            if (!e.Name.Equals(d.Name, StringComparison.OrdinalIgnoreCase)) list.Add(new(e.Name, RefersToOf(e)));
+        list.Add(new(d.Name, RefersToOf(d)));
         ReplaceNames(list);
     }
 
@@ -419,7 +428,7 @@ public sealed class Workbook
         if (!_names.ContainsKey(name)) throw new ArgumentException($"Unknown name: '{name}'", nameof(name));
         var list = new List<KeyValuePair<string, string>>(_names.Count);
         foreach (var e in _names.Values)
-            if (!e.Name.Equals(name, StringComparison.OrdinalIgnoreCase)) list.Add(new(e.Name, e.RefersTo));
+            if (!e.Name.Equals(name, StringComparison.OrdinalIgnoreCase)) list.Add(new(e.Name, RefersToOf(e)));
         ReplaceNames(list);
     }
 
@@ -437,68 +446,79 @@ public sealed class Workbook
         {
             var d = ParseName(names[i].Key, names[i].Value, nameof(names));
             if (!seen.Add(d.Name)) throw new ArgumentException($"Duplicate name: '{d.Name}'", nameof(names));
-            canonical[i] = new(d.Name, d.RefersTo);
+            canonical[i] = new(d.Name, RefersToOf(d));
         }
         Array.Sort(canonical, static (a, b) => StringComparer.OrdinalIgnoreCase.Compare(a.Key, b.Key));
-        Commit([], canonical, record: true);
+        Commit([], canonical, newSheets: null, record: true);
     }
 
-    /// <summary>The exact input of the cell, or <c>""</c> if blank.</summary>
-    public string GetInput(string address) =>
-        _store.TryGet(ParseKey(address, nameof(address)), out var c) ? c.Input : "";
+    /// <summary>The exact input of the cell (qualified or active-sheet address, CR1.3), or <c>""</c> if blank.</summary>
+    public string GetInput(string address) => CurrentInput(ParseCell(address, nameof(address)));
 
-    /// <summary>The cell's current value; Blank for an empty cell.</summary>
-    public CellValue GetValue(string address) =>
-        _store.TryGet(ParseKey(address, nameof(address)), out var c) ? c.Value : CellValue.Blank;
-
-    /// <summary>Canonical addresses of all cells with input, row-major.</summary>
-    public IReadOnlyList<string> GetUsedAddresses()
+    /// <summary>The cell's current value (qualified or active-sheet address, CR1.3); Blank for an empty cell.</summary>
+    public CellValue GetValue(string address)
     {
-        var result = new List<string>(_store.Count);
-        foreach (int key in _store.KeysRowMajor()) result.Add(CellAddress.FromKey(key).ToString());
-        return result;
+        long g = ParseCell(address, nameof(address));
+        return StoreOf(g) is { } s && s.TryGet(GlobalKey.Cell(g), out var c) ? c.Value : CellValue.Blank;
     }
 
     /// <summary>
-    /// Defined names as (name in its defined casing, canonical <c>refersTo</c>), sorted
-    /// <see cref="StringComparer.OrdinalIgnoreCase"/> (§9.1, §9.6).
+    /// Defined names as (name in its defined casing, canonical sheet-qualified <c>refersTo</c> such as
+    /// <c>Sheet1!$B$1</c>), sorted <see cref="StringComparer.OrdinalIgnoreCase"/> (§9.1, §9.6, CR1.4).
     /// </summary>
     public IReadOnlyList<KeyValuePair<string, string>> GetNames()
     {
         var result = new KeyValuePair<string, string>[_names.Count];
         int i = 0;
-        foreach (var d in _names.Values) result[i++] = new(d.Name, d.RefersTo);
+        foreach (var d in _names.Values) result[i++] = new(d.Name, RefersToOf(d));
         Array.Sort(result, static (a, b) => StringComparer.OrdinalIgnoreCase.Compare(a.Key, b.Key));
         return result;
     }
 
-    /// <summary>Validates one name and its <c>refersTo</c> (§9.6) and returns its canonical definition.</summary>
-    private static NameDef ParseName(string name, string refersTo, string paramName, string? refersToParamName = null)
+    /// <summary>
+    /// Validates one name and its <c>refersTo</c> (§9.6, CR1.4) and returns its definition. An unqualified
+    /// <c>refersTo</c> is qualified with the active sheet; a sheet that does not exist throws (names never dangle).
+    /// </summary>
+    private NameDef ParseName(string name, string refersTo, string paramName, string? refersToParamName = null)
     {
         if (!NameRules.IsValidName(name)) throw new ArgumentException($"Invalid name: '{name}'", paramName);
-        if (refersTo == ErrorCodes.Ref) return new NameDef(name, ErrorCodes.Ref, null, false);
-        if (!NameRules.TryParseRefersTo(refersTo, out var target))
+        if (refersTo == ErrorCodes.Ref) return new NameDef(name, null, null, false);
+        if (!NameRules.TryParseRefersTo(refersTo, out string? sheetName, out var target))
             throw new ArgumentException($"Invalid refersTo for name '{name}': '{refersTo}'", refersToParamName ?? paramName);
+        Sheet? sheet = Active;
+        if (sheetName is not null && !_sheetsByName.TryGetValue(sheetName, out sheet))
+            throw new ArgumentException($"Unknown sheet in refersTo for name '{name}': '{refersTo}'", refersToParamName ?? paramName);
+        // ':' cannot occur in a sheet name (CR1.1), so it marks the range form.
         bool isRange = refersTo.Contains(':');
-        return new NameDef(name, NameRules.FormatRefersTo(target, isRange), target, isRange);
+        return new NameDef(name, sheet.Id, target, isRange);
     }
+
+    /// <summary>The canonical qualified <c>refersTo</c> of a name, in its sheet's current casing (CR1.4).</summary>
+    private string RefersToOf(NameDef d) =>
+        d.Target is { } t && d.SheetId is { } id && _sheetsById.TryGetValue(id, out var s)
+            ? NameRules.FormatRefersTo(s.Name, t, d.IsRange)
+            : ErrorCodes.Ref;
 
     /// <summary>Stores a (validated) name and points its dependency-graph node at the target (§6.1, §9.6).</summary>
     private void AddName(NameDef d)
     {
         _names[d.Name] = d;
-        _graph.SetNameTarget(d.Name.ToUpperInvariant(), SheetId, d.Target);
+        _graph.SetNameTarget(d.Name.ToUpperInvariant(), d.SheetId, d.Target);
     }
 
     /// <summary>
-    /// The single mutation path (§9.2, §9.3). <paramref name="edits"/> are validated, have distinct keys and carry the
-    /// current input as <c>OldInput</c>; no-op edits are dropped. <paramref name="newNames"/> is the complete sorted
-    /// name list to install (validated, canonical), or null to leave names alone; an identical list is a no-op.
-    /// If anything changed: applies inputs and names, plans and evaluates once over all changed keys and names, raises
-    /// <see cref="CellsChanged"/> once, and pushes one undo step when <paramref name="record"/> is true.
-    /// <see cref="LastRecalc"/> is always set (0 when nothing changed).
+    /// The single mutation path (§9.2, §9.3, CR1.1). <paramref name="edits"/> are validated, have distinct keys and
+    /// carry the current input as <c>OldInput</c>; no-op edits are dropped. <paramref name="newNames"/> is the
+    /// complete sorted name list to install (validated, canonical), or null to leave names alone; an identical list
+    /// is a no-op. <paramref name="newSheets"/> is the complete sheet layout to install, or null (likewise).
+    /// If anything changed, in order: installs the layout (creating stores for new ids), applies the inputs,
+    /// installs the names, drops the stores of removed sheets, rebinds formulas naming a sheet that started or
+    /// stopped existing, then plans and evaluates once. Raises <see cref="SheetsChanged"/> and
+    /// <see cref="CellsChanged"/> once each when relevant, and pushes one undo step when <paramref name="record"/>
+    /// is true. <see cref="LastRecalc"/> is always set (0 when nothing changed).
     /// </summary>
-    private void Commit(IReadOnlyList<CellEdit> edits, IReadOnlyList<KeyValuePair<string, string>>? newNames, bool record)
+    private void Commit(IReadOnlyList<CellEdit> edits, IReadOnlyList<KeyValuePair<string, string>>? newNames,
+        IReadOnlyList<SheetEntry>? newSheets, bool record)
     {
         var real = new List<CellEdit>(edits.Count);
         foreach (var e in edits)
@@ -512,31 +532,59 @@ public sealed class Workbook
             else namesBefore = current;
         }
 
-        if (real.Count == 0 && newNames is null)
+        IReadOnlyList<SheetEntry>? sheetsBefore = null;
+        if (newSheets is not null)
+        {
+            var current = Layout();
+            if (current.SequenceEqual(newSheets)) newSheets = null;
+            else sheetsBefore = current;
+        }
+
+        if (real.Count == 0 && newNames is null && newSheets is null)
         {
             LastRecalc = new RecalcStats(0);
             return;
         }
 
+        // 1. Layout. Removed sheets stay readable (for edits clearing them) until step 4.
+        int activeBefore = _activeId;
+        List<string> existenceChanged = newSheets is null ? [] : InstallLayout(newSheets);
+
+        // 2. Cell edits, grouped per sheet store.
         var changed = new List<long>(real.Count);
         var keys = new long[real.Count];
-        var writes = new (int Key, Cell? Cell)[real.Count];
+        var writes = new Dictionary<int, List<(int Key, Cell? Cell)>>();
         for (int i = 0; i < real.Count; i++)
         {
-            keys[i] = real[i].Key;
-            // Keys are distinct: reads see the old store. The store is keyed by cell key (single sheet).
-            writes[i] = (GlobalKey.Cell(real[i].Key), Prepare(real[i].Key, real[i].NewInput));
-            changed.Add(real[i].Key);
+            long g = real[i].Key;
+            keys[i] = g;
+            int sheet = GlobalKey.Sheet(g);
+            if (!writes.TryGetValue(sheet, out var list)) writes[sheet] = list = [];
+            // Keys are distinct: reads see the old store.
+            list.Add((GlobalKey.Cell(g), Prepare(g, real[i].NewInput)));
+            changed.Add(g);
         }
-        _store.SetMany(writes);
+        foreach (var (sheet, list) in writes) SheetById(sheet).Store.SetMany(list);
+
+        // 3. Names.
         List<string> changedNames = newNames is null ? [] : InstallNames(newNames);
 
-        // The graph is fully updated before planning and is not touched while the plan is produced or evaluated.
-        var plan = _planner.Plan(keys, changedNames, [], _isFormula);
+        // 4. Drop removed sheets: their remaining formulas leave the graph.
+        DropRemovedSheets();
+
+        // 5. Rebind formulas naming a sheet whose existence (or id) changed; they are re-evaluated regardless.
+        var extraRoots = new List<long>();
+        foreach (string upper in existenceChanged)
+            foreach (long f in _graph.Rebind(upper, _resolveSheet))
+                if (IsFormula(f)) extraRoots.Add(f);
+
+        // 6. The graph is fully updated before planning and is not touched while the plan is produced or evaluated.
+        var plan = _planner.Plan(keys, changedNames, extraRoots, _isFormula);
         LastRecalc = new RecalcStats(Evaluate(plan, changed));
 
         // History/dirty state is final before handlers run (they may read IsDirty/CanUndo, or throw).
-        if (record) _history.Push(new EditStep(++_lastStepId, real.ToArray(), namesBefore, newNames));
+        if (record) _history.Push(new EditStep(++_lastStepId, real.ToArray(), namesBefore, newNames, sheetsBefore, newSheets));
+        if (newSheets is not null || _activeId != activeBefore) SheetsChanged?.Invoke(this, EventArgs.Empty);
         Raise(changed);
     }
 
@@ -564,7 +612,8 @@ public sealed class Workbook
             var d = ParseName(name, refersTo, nameof(names));
             AddName(d);
             // A form change alone (1x1 range ↔ cell) changes evaluation too (=R is #VALUE! for a range).
-            if (!old.Remove(name, out var prev) || prev.Target != d.Target || prev.IsRange != d.IsRange) changed.Add(name.ToUpperInvariant());
+            if (!old.Remove(name, out var prev) || prev.Target != d.Target || prev.SheetId != d.SheetId || prev.IsRange != d.IsRange)
+                changed.Add(name.ToUpperInvariant());
         }
         foreach (var gone in old.Keys)
         {
@@ -575,14 +624,16 @@ public sealed class Workbook
         return changed;
     }
 
-    private string CurrentInput(long key) => _store.TryGet(GlobalKey.Cell(key), out var c) ? c.Input : "";
+    /// <summary>The cell's input, or <c>""</c> when blank or its sheet does not exist.</summary>
+    private string CurrentInput(long key) => StoreOf(key) is { } s && s.TryGet(GlobalKey.Cell(key), out var c) ? c.Input : "";
 
     /// <summary>Interprets and stores one input, updating the dependency graph.</summary>
     private void Apply(long key, string input)
     {
+        var store = SheetById(GlobalKey.Sheet(key)).Store;
         var cell = Prepare(key, input);
-        if (cell is null) _store.Remove(GlobalKey.Cell(key));
-        else _store.Set(GlobalKey.Cell(key), cell);
+        if (cell is null) store.Remove(GlobalKey.Cell(key));
+        else store.Set(GlobalKey.Cell(key), cell);
     }
 
     /// <summary>
@@ -592,7 +643,7 @@ public sealed class Workbook
     /// </summary>
     private Cell? Prepare(long key, string input)
     {
-        bool hadCell = _store.TryGet(GlobalKey.Cell(key), out var old);
+        bool hadCell = SheetById(GlobalKey.Sheet(key)).Store.TryGet(GlobalKey.Cell(key), out var old);
         var cell = InputInterpreter.Interpret(input, _arity);
 
         if (cell is { Kind: CellKind.Formula })
@@ -618,12 +669,14 @@ public sealed class Workbook
         for (int i = 0; i < order.Count; i++)
         {
             long key = order[i];
-            _store.TryGet(GlobalKey.Cell(key), out var cell);
+            int sheet = GlobalKey.Sheet(key);
+            _sheetsById[sheet].Store.TryGet(GlobalKey.Cell(key), out var cell);
             CellValue v;
             if (anyCycles && cycles.Contains(key)) v = Circ;
             else
             {
                 var at = GlobalKey.Address(key);
+                _ctx.FormulaSheet = sheet;
                 _ctx.FormulaRow = at.Row;
                 _ctx.FormulaCol = at.Col;
                 v = _evaluator.Evaluate(cell.Formula!, _ctx);
@@ -637,21 +690,30 @@ public sealed class Workbook
         return order.Count;
     }
 
+    /// <summary>
+    /// Raises <see cref="CellsChanged"/> with distinct addresses in sheet order, then row-major. Addresses are
+    /// qualified iff the workbook has more than one sheet after the commit (CR1.3); cells of sheets that no longer
+    /// exist are omitted.
+    /// </summary>
     private void Raise(List<long> changed)
     {
         var handler = CellsChanged;
         if (handler is null || changed.Count == 0) return;
-        changed.Sort();
-        var addresses = new List<string>(changed.Count);
-        for (int i = 0; i < changed.Count; i++)
-            if (i == 0 || changed[i] != changed[i - 1]) addresses.Add(GlobalKey.Address(changed[i]).ToString()); // unqualified (CR-1 Task 3)
+        var position = new Dictionary<int, int>(_sheets.Count);
+        for (int i = 0; i < _sheets.Count; i++) position[_sheets[i].Id] = i;
+        var live = new List<(int Pos, int Cell)>(changed.Count);
+        foreach (long g in changed)
+            if (position.TryGetValue(GlobalKey.Sheet(g), out int p)) live.Add((p, GlobalKey.Cell(g)));
+        if (live.Count == 0) return;
+        live.Sort();
+        var addresses = new List<string>(live.Count);
+        for (int i = 0; i < live.Count; i++)
+            if (i == 0 || live[i] != live[i - 1]) addresses.Add(FormatAddress(_sheets[live[i].Pos], live[i].Cell));
         handler(this, new CellsChangedEventArgs(addresses.ToArray()));
     }
 
-    private bool IsFormula(long key) => _store.TryGet(GlobalKey.Cell(key), out var c) && c.Kind == CellKind.Formula;
-
-    private static int ParseKey(string address, string paramName) =>
-        CellAddress.TryParse(address, out var a) ? a.Key : throw new ArgumentException($"Invalid cell address: '{address}'", paramName);
+    private bool IsFormula(long key) =>
+        StoreOf(key) is { } s && s.TryGet(GlobalKey.Cell(key), out var c) && c.Kind == CellKind.Formula;
 
     private static void ValidateInput(string input, string paramName)
     {
@@ -660,41 +722,52 @@ public sealed class Workbook
             throw new ArgumentException($"Input exceeds {MaxInputLength} characters.", paramName);
     }
 
-    /// <summary>The read-only view of the workbook (cells and defined names) that formulas evaluate against.</summary>
-    private sealed class EvalContext(CellStore store, Dictionary<string, NameDef> names) : IEvalContext
+    /// <summary>The read-only view of the workbook (sheets, cells and defined names) that formulas evaluate against.</summary>
+    private sealed class EvalContext(Workbook wb) : IEvalContext
     {
+        public int FormulaSheet { get; set; }
         public int FormulaRow { get; set; }
         public int FormulaCol { get; set; }
 
-        public CellValue GetCellValue(int row, int col) =>
-            store.TryGet(CellAddress.KeyOf(row, col), out var c) ? c.Value : CellValue.Blank;
+        public CellValue GetCellValue(int sheet, int row, int col) =>
+            wb._sheetsById.TryGetValue(sheet, out var s) && s.Store.TryGet(CellAddress.KeyOf(row, col), out var c) ? c.Value : CellValue.Blank;
 
-        public bool TryResolveName(string name, out RangeAddress target, out bool isRange)
+        public bool TryResolveSheet(string name, out int sheet)
         {
-            if (names.TryGetValue(name, out var d) && d.Target is { } t)
+            if (wb._sheetsByName.TryGetValue(name, out var s)) { sheet = s.Id; return true; }
+            sheet = 0;
+            return false;
+        }
+
+        public bool TryResolveName(string name, out int sheet, out RangeAddress target, out bool isRange)
+        {
+            if (wb._names.TryGetValue(name, out var d) && d.Target is { } t && d.SheetId is { } id && wb._sheetsById.ContainsKey(id))
             {
+                sheet = id;
                 target = t;
                 isRange = d.IsRange;
                 return true;
             }
+            sheet = 0;
             target = default;
             isRange = false;
             return false;
         }
 
         public CellValue UnresolvedNameValue(string name) =>
-            CellValue.FromError(names.ContainsKey(name) ? ErrorCodes.Ref : ErrorCodes.Name);
+            CellValue.FromError(wb._names.ContainsKey(name) ? ErrorCodes.Ref : ErrorCodes.Name);
 
-        public IEnumerable<(int Row, int Col, CellValue Value)> EnumerateNonBlank(RangeAddress range)
+        public IEnumerable<(int Row, int Col, CellValue Value)> EnumerateNonBlank(int sheet, RangeAddress range)
         {
+            if (!wb._sheetsById.TryGetValue(sheet, out var s)) return [];
             var r = new RangeAddress(
                 new CellAddress(Math.Min(range.TopLeft.Row, range.BottomRight.Row), Math.Min(range.TopLeft.Col, range.BottomRight.Col)),
                 new CellAddress(Math.Max(range.TopLeft.Row, range.BottomRight.Row), Math.Max(range.TopLeft.Col, range.BottomRight.Col)));
-            return r.Cols == 1 ? SingleColumn(r) : ByKey(r);
+            return r.Cols == 1 ? SingleColumn(s.Store, r) : ByKey(s.Store, r);
         }
 
         /// <summary>Reads the column's row/cell lists directly: no dictionary lookup per cell (§12 P-4, P-7).</summary>
-        private IEnumerable<(int Row, int Col, CellValue Value)> SingleColumn(RangeAddress r)
+        private static IEnumerable<(int Row, int Col, CellValue Value)> SingleColumn(CellStore store, RangeAddress r)
         {
             int c = r.TopLeft.Col, bottom = r.BottomRight.Row;
             if (store.GetColumn(c) is not { } col) yield break;
@@ -707,7 +780,7 @@ public sealed class Workbook
             }
         }
 
-        private IEnumerable<(int Row, int Col, CellValue Value)> ByKey(RangeAddress r)
+        private static IEnumerable<(int Row, int Col, CellValue Value)> ByKey(CellStore store, RangeAddress r)
         {
             foreach (int key in store.KeysInRange(r))
             {

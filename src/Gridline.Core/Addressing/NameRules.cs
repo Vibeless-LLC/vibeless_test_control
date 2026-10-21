@@ -62,6 +62,29 @@ public static class NameRules
         return target.TopLeft == target.BottomRight ? a + ":" + a : FormatRefersTo(target);
     }
 
+    /// <summary>
+    /// As <see cref="TryParseRefersTo(string, out RangeAddress)"/>, with an optional sheet prefix (<c>Data!$B$1</c>,
+    /// <c>'My Sheet'!$A$1:$A$10</c>) (CR1.4). <paramref name="sheet"/> is the name as written, or null when unqualified.
+    /// The sheet's existence is the caller's concern.
+    /// </summary>
+    public static bool TryParseRefersTo(string refersTo, out string? sheet, out RangeAddress target)
+    {
+        sheet = null;
+        target = default;
+        if (string.IsNullOrEmpty(refersTo)) return false;
+        int start = 0;
+        if (refersTo[0] == '\'' || refersTo.Contains('!', StringComparison.Ordinal))
+        {
+            if (!SheetNames.TryParsePrefix(refersTo.AsSpan(), 0, out var name, out start)) return false;
+            sheet = name;
+        }
+        return TryParseRefersTo(refersTo[start..], out target);
+    }
+
+    /// <summary>The qualified canonical form: <c>Data!$B$1</c>, <c>'My Sheet'!$A$1:$A$10</c> (CR1.4).</summary>
+    public static string FormatRefersTo(string sheet, RangeAddress target, bool asRange) =>
+        SheetNames.Format(sheet) + "!" + FormatRefersTo(target, asRange);
+
     /// <summary><c>$LETTERS$DIGITS</c>, then the ordinary in-bounds cell address rules.</summary>
     private static bool TryParseAbsolute(ReadOnlySpan<char> s, out CellAddress a)
     {

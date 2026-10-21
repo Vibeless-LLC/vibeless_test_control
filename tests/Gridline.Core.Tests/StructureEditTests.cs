@@ -9,12 +9,12 @@ public class StructureEditTests
     [Fact] public void UnchangedFormula_KeepsVerbatimText() { var wb = new Workbook(); wb.SetCell("A5","= b1 + 1"); wb.InsertRows(3, 2); Assert.Equal("= b1 + 1", wb.GetInput("A7")); }
     [Fact] public void DeleteRows_RefToDeletedIsRef() { var wb = new Workbook(); wb.SetCell("A2","5"); wb.SetCell("B5","=A2*2"); wb.DeleteRows(2, 1); Assert.Equal("=#REF!*2", wb.GetInput("B4")); Assert.Equal("E:#REF!", wb.GetValue("B4").ToCanonicalString()); }
     [Fact] public void DeleteColumns_RangeShrinks() { var wb = new Workbook(); wb.SetCell("E1","=SUM($A$1:D1)"); wb.DeleteColumns(2, 2); Assert.Equal("=SUM($A$1:B1)", wb.GetInput("C1")); }
-    [Fact] public void InsertColumns_LettersAndNames() { var wb = new Workbook(); wb.DefineName("R","$B$1:$C$2"); wb.InsertColumns(2, 1); Assert.Equal("$C$1:$D$2", wb.GetNames()[0].Value); }
+    [Fact] public void InsertColumns_LettersAndNames() { var wb = new Workbook(); wb.DefineName("R","$B$1:$C$2"); wb.InsertColumns(2, 1); Assert.Equal("Sheet1!$C$1:$D$2", wb.GetNames()[0].Value); }
     [Fact] public void Name_FullyDeleted_IsRef() { var wb = new Workbook(); wb.DefineName("R","$A$2:$A$3"); wb.SetCell("B1","=R"); wb.DeleteRows(2, 2); Assert.Equal("#REF!", wb.GetNames()[0].Value); Assert.Equal("E:#REF!", wb.GetValue("B1").ToCanonicalString()); }
     [Fact] public void InsertRows_DataOverflowThrows() { var wb = new Workbook(); wb.SetCell("A100000","x"); Assert.Throws<InvalidOperationException>(() => wb.InsertRows(1, 1)); Assert.Equal("x", wb.GetInput("A100000")); Assert.True(wb.Undo()); Assert.False(wb.CanUndo); }
     [Fact] public void InsertRows_RefOverflow() { var wb = new Workbook(); wb.SetCell("A1","=A99999+SUM(B99990:B100000)"); wb.InsertRows(2, 5); Assert.Equal("=#REF!+SUM(B99995:B100000)", wb.GetInput("A1")); }
     [Fact] public void ArgValidation() { var wb = new Workbook(); Assert.Throws<ArgumentOutOfRangeException>(() => wb.InsertRows(0, 1)); Assert.Throws<ArgumentOutOfRangeException>(() => wb.InsertRows(1, 0)); Assert.Throws<ArgumentOutOfRangeException>(() => wb.DeleteRows(99999, 3)); Assert.Throws<ArgumentOutOfRangeException>(() => wb.DeleteColumns(703, 1)); }
-    [Fact] public void DeleteRows_UndoRestoresVerbatimAndNames() { var wb = new Workbook(); wb.SetCell("A3","= a1 + 1"); wb.DefineName("R","$A$1"); wb.DeleteRows(1, 1); Assert.Equal("=#REF!+1", wb.GetInput("A2")); wb.Undo(); Assert.Equal("= a1 + 1", wb.GetInput("A3")); Assert.Equal("$A$1", wb.GetNames()[0].Value); }
+    [Fact] public void DeleteRows_UndoRestoresVerbatimAndNames() { var wb = new Workbook(); wb.SetCell("A3","= a1 + 1"); wb.DefineName("R","$A$1"); wb.DeleteRows(1, 1); Assert.Equal("=#REF!+1", wb.GetInput("A2")); wb.Undo(); Assert.Equal("= a1 + 1", wb.GetInput("A3")); Assert.Equal("Sheet1!$A$1", wb.GetNames()[0].Value); }
     [Fact] public void Row_ReflectsMove() { var wb = new Workbook(); wb.SetCell("A2","=ROW()"); wb.InsertRows(1, 3); Assert.Equal("N:5", wb.GetValue("A5").ToCanonicalString()); }
 
     // ---- additional coverage ----
@@ -148,14 +148,14 @@ public class StructureEditTests
         wb.DefineName("C", "$B$2"); wb.DefineName("R", "$B$2:$B$2"); wb.DefineName("S", "$A$1:$A$5");
         wb.SetCell("B2", "7"); wb.SetCell("E1", "=C"); wb.SetCell("F1", "=SUM(R)");
         wb.InsertRows(2, 1);
-        Assert.Equal(new[] { KV("C", "$B$3"), KV("R", "$B$3:$B$3"), KV("S", "$A$1:$A$6") }, wb.GetNames());
+        Assert.Equal(new[] { KV("C", "Sheet1!$B$3"), KV("R", "Sheet1!$B$3:$B$3"), KV("S", "Sheet1!$A$1:$A$6") }, wb.GetNames());
         Assert.Equal("N:7", wb.GetValue("E1").ToCanonicalString());
         wb.DeleteRows(3, 1);
-        Assert.Equal(new[] { KV("C", "#REF!"), KV("R", "#REF!"), KV("S", "$A$1:$A$5") }, wb.GetNames());
+        Assert.Equal(new[] { KV("C", "#REF!"), KV("R", "#REF!"), KV("S", "Sheet1!$A$1:$A$5") }, wb.GetNames());
         Assert.Equal("E:#REF!", wb.GetValue("E1").ToCanonicalString());
         Assert.Equal("E:#REF!", wb.GetValue("F1").ToCanonicalString());
         wb.Undo();
-        Assert.Equal(new[] { KV("C", "$B$3"), KV("R", "$B$3:$B$3"), KV("S", "$A$1:$A$6") }, wb.GetNames());
+        Assert.Equal(new[] { KV("C", "Sheet1!$B$3"), KV("R", "Sheet1!$B$3:$B$3"), KV("S", "Sheet1!$A$1:$A$6") }, wb.GetNames());
         Assert.Equal("N:7", wb.GetValue("F1").ToCanonicalString());
     }
 
@@ -165,7 +165,7 @@ public class StructureEditTests
         var wb = new Workbook();
         wb.SetCell("B1", "4"); wb.DefineName("Rate", "$B$1"); wb.SetCell("A5", "=Rate*2");
         wb.InsertColumns(1, 1);
-        Assert.Equal("$C$1", wb.GetNames()[0].Value);
+        Assert.Equal("Sheet1!$C$1", wb.GetNames()[0].Value);
         Assert.Equal("=Rate*2", wb.GetInput("B5"));
         Assert.Equal("N:8", wb.GetValue("B5").ToCanonicalString());
         wb.SetCell("C1", "5");
@@ -186,16 +186,16 @@ public class StructureEditTests
         Assert.Equal(new[] { "A1", "A2", "A3" }, addrs);
         Assert.True(wb.IsDirty);
         Assert.Equal("=A2+1", wb.GetInput("A3"));
-        Assert.Equal("$A$3", wb.GetNames()[0].Value);
+        Assert.Equal("Sheet1!$A$3", wb.GetNames()[0].Value);
         Assert.True(wb.Undo());
         Assert.False(wb.IsDirty);
         Assert.Equal(new[] { "A1", "A2" }, wb.GetUsedAddresses());
         Assert.Equal("=A1+1", wb.GetInput("A2"));
-        Assert.Equal("$A$2", wb.GetNames()[0].Value);
+        Assert.Equal("Sheet1!$A$2", wb.GetNames()[0].Value);
         Assert.True(wb.Redo());
         Assert.Equal("=A2+1", wb.GetInput("A3"));
         Assert.Equal("N:2", wb.GetValue("A3").ToCanonicalString());
-        Assert.Equal("$A$3", wb.GetNames()[0].Value);
+        Assert.Equal("Sheet1!$A$3", wb.GetNames()[0].Value);
     }
 
     [Fact]

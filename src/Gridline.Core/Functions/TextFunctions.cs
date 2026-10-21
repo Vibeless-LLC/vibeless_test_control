@@ -134,7 +134,7 @@ internal static class TextFunctions
             {
                 long prev = -1; // linear row-major index of the last cell consumed
                 var top = range.Address.TopLeft;
-                foreach (var (row, col, v) in range.Ctx.EnumerateNonBlank(range.Address))
+                foreach (var (row, col, v) in range.NonBlankCells())
                 {
                     long idx = (long)(row - top.Row) * range.Cols + (col - top.Col);
                     if (sparseBlanks && !ignoreEmpty && !AppendBlanks(idx - prev - 1)) return tooLong;

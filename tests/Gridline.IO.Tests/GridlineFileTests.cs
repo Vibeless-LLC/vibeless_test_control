@@ -20,7 +20,7 @@ public class GridlineFileTests
     [Fact] public void Load_RelativeRefersTo_Throws() => Assert.Throws<GridlineFormatException>(() => GridlineFile.Load("{\"format\":\"gridline\",\"version\":1,\"names\":{\"R\":\"A1\"},\"cells\":[]}"u8));
     [Fact] public void Names_NotObject_Throws() => Assert.Throws<GridlineFormatException>(() => GridlineFile.Load("{\"format\":\"gridline\",\"version\":1,\"names\":[],\"cells\":[]}"u8));
     [Fact] public void Names_RefTargetSurvivesRoundTrip() { var wb = new Workbook(); wb.DefineName("R", "$A$2"); wb.DeleteRows(2, 1); var bytes = GridlineFile.SerializeToUtf8(wb); var back = GridlineFile.Load(bytes); Assert.Equal("#REF!", back.GetNames()[0].Value); Assert.Equal(bytes, GridlineFile.SerializeToUtf8(back)); }
-    [Fact] public void Names_OneByOneRangeSurvivesRoundTrip() { var wb = new Workbook(); wb.DefineName("R", "$A$1:$A$1"); var bytes = GridlineFile.SerializeToUtf8(wb); var back = GridlineFile.Load(bytes); Assert.Equal("$A$1:$A$1", back.GetNames()[0].Value); Assert.Equal(bytes, GridlineFile.SerializeToUtf8(back)); }
+    [Fact] public void Names_OneByOneRangeSurvivesRoundTrip() { var wb = new Workbook(); wb.DefineName("R", "$A$1:$A$1"); var bytes = GridlineFile.SerializeToUtf8(wb); var back = GridlineFile.Load(bytes); Assert.Equal("Sheet1!$A$1:$A$1", back.GetNames()[0].Value); Assert.Equal(bytes, GridlineFile.SerializeToUtf8(back)); }
     [Fact] public void Save_Empty_ExactBytes() => Assert.Equal("{\n  \"format\": \"gridline\",\n  \"version\": 1,\n  \"names\": {},\n  \"cells\": []\n}\n", GridlineFile.Serialize(new Workbook()));
 
     [Fact]
@@ -96,7 +96,7 @@ public class GridlineFileTests
     public void Load_SpecExample_NamesAndValues()
     {
         var wb = GridlineFile.Load(SpecExampleBytes());
-        Assert.Equal(new[] { KeyValuePair.Create("Rate", "$B$1"), KeyValuePair.Create("Total", "$A$1:$A$10") }, wb.GetNames());
+        Assert.Equal(new[] { KeyValuePair.Create("Rate", "Sheet1!$B$1"), KeyValuePair.Create("Total", "Sheet1!$A$1:$A$10") }, wb.GetNames());
         Assert.Equal("N:25", wb.GetValue("A1").ToCanonicalString());
         AssertFreshHistory(wb);
     }

@@ -43,6 +43,16 @@ internal sealed class Evaluator(IReadOnlyDictionary<string, IFunction> functions
         new CellAddress(Math.Max(r.First.Row, r.Second.Row), Math.Max(r.First.Col, r.Second.Col)));
 
     /// <summary>
+    /// The sheet a reference reads: the formula's own sheet when unqualified, else the named sheet (case-insensitive).
+    /// False when the named sheet does not exist; such a reference evaluates to <c>#REF!</c> (CR1.2).
+    /// </summary>
+    internal bool TryResolveSheet(string? sheetName, IEvalContext ctx, out int sheet)
+    {
+        if (sheetName is null) { sheet = ctx.FormulaSheet; return true; }
+        return ctx.TryResolveSheet(sheetName, out sheet);
+    }
+
+    /// <summary>
     /// Scalar value of <paramref name="node"/>. May return Blank (a reference to an empty cell, §6.6);
     /// a range in scalar position gives <c>#VALUE!</c>.
     /// </summary>
@@ -57,11 +67,13 @@ internal sealed class Evaluator(IReadOnlyDictionary<string, IFunction> functions
             case StringNode s: return CellValue.FromText(s.Value);
             case BoolNode b: return CellValue.FromBoolean(b.Value);
             case ErrorNode e: return CellValue.FromError(e.Code);
-            case RefNode r: return ctx.GetCellValue(r.Row, r.Col);
-            case RangeNode: return CellValue.FromError(ErrorCodes.Value);
+            case RefNode r:
+                return TryResolveSheet(r.Sheet, ctx, out int rs) ? ctx.GetCellValue(rs, r.Row, r.Col) : CellValue.FromError(ErrorCodes.Ref);
+            case RangeNode rn:
+                return CellValue.FromError(TryResolveSheet(rn.Sheet, ctx, out _) ? ErrorCodes.Value : ErrorCodes.Ref);
             case NameNode nn:
-                if (!ctx.TryResolveName(nn.Name, out var target, out bool isRange)) return ctx.UnresolvedNameValue(nn.Name);
-                return isRange ? CellValue.FromError(ErrorCodes.Value) : ctx.GetCellValue(target.TopLeft.Row, target.TopLeft.Col);
+                if (!ctx.TryResolveName(nn.Name, out int ns, out var target, out bool isRange)) return ctx.UnresolvedNameValue(nn.Name);
+                return isRange ? CellValue.FromError(ErrorCodes.Value) : ctx.GetCellValue(ns, target.TopLeft.Row, target.TopLeft.Col);
             case UnaryNode u:
             {
                 var v = EvalScalar(u.Operand, ctx);

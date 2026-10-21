@@ -30,23 +30,26 @@ internal sealed class Arg
         switch (inner)
         {
             case RefNode r:
+                // A reference to a missing sheet is not a reference; its value is #REF! (CR1.2).
+                if (!evaluator.TryResolveSheet(r.Sheet, ctx, out int rs)) break;
                 IsReference = true;
                 var a = new CellAddress(r.Row, r.Col);
-                Range = new RangeRef(new RangeAddress(a, a), ctx);
+                Range = new RangeRef(rs, new RangeAddress(a, a), ctx);
                 break;
             case RangeNode rn:
+                if (!evaluator.TryResolveSheet(rn.Sheet, ctx, out int ns)) break;
                 IsReference = true;
                 IsRange = true;
-                Range = new RangeRef(Evaluator.Normalize(rn), ctx);
+                Range = new RangeRef(ns, Evaluator.Normalize(rn), ctx);
                 break;
             case NameNode nn:
                 // An undefined name is not a reference: it has no cells, and its value is #NAME?.
                 _name = nn.Name;
-                if (ctx.TryResolveName(nn.Name, out var target, out bool isRange))
+                if (ctx.TryResolveName(nn.Name, out int sheet, out var target, out bool isRange))
                 {
                     IsReference = true;
                     IsRange = isRange;
-                    Range = new RangeRef(target, ctx);
+                    Range = new RangeRef(sheet, target, ctx);
                 }
                 break;
         }

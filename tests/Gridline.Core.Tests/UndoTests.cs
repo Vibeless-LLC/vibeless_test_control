@@ -240,18 +240,18 @@ public class UndoTests
         int n = 0;
         wb.CellsChanged += (_, _) => n++;
         wb.ReplaceNames([KV("Rate", "$B$1"), KV("Other", "$a$1:$b$2")]);
-        Assert.Equal(new[] { KV("Other", "$A$1:$B$2"), KV("Rate", "$B$1") }, wb.GetNames());
+        Assert.Equal(new[] { KV("Other", "Sheet1!$A$1:$B$2"), KV("Rate", "Sheet1!$B$1") }, wb.GetNames());
         Assert.Equal("N:30", wb.GetValue("C1").ToCanonicalString());
         Assert.Equal(1, n);
         Assert.True(wb.IsDirty);
 
         Assert.True(wb.Undo());
-        Assert.Equal(new[] { KV("rate", "$A$1") }, wb.GetNames());
+        Assert.Equal(new[] { KV("rate", "Sheet1!$A$1") }, wb.GetNames());
         Assert.Equal("N:20", wb.GetValue("C1").ToCanonicalString());
         Assert.False(wb.IsDirty);
 
         Assert.True(wb.Redo());
-        Assert.Equal(new[] { KV("Other", "$A$1:$B$2"), KV("Rate", "$B$1") }, wb.GetNames());
+        Assert.Equal(new[] { KV("Other", "Sheet1!$A$1:$B$2"), KV("Rate", "Sheet1!$B$1") }, wb.GetNames());
         Assert.Equal("N:30", wb.GetValue("C1").ToCanonicalString());
     }
 
@@ -287,7 +287,7 @@ public class UndoTests
         wb.ReplaceNames([KV("RATE", "$A$1")]);
         Assert.True(wb.CanUndo);
         wb.Undo();
-        Assert.Equal(new[] { KV("Rate", "$A$1") }, wb.GetNames());
+        Assert.Equal(new[] { KV("Rate", "Sheet1!$A$1") }, wb.GetNames());
     }
 
     [Fact]
@@ -296,7 +296,7 @@ public class UndoTests
         var wb = Workbook.FromSnapshot([], [KV("Rate", "$A$1")]);
         Assert.Throws<ArgumentException>(() => wb.ReplaceNames([KV("Ok", "$B$1"), KV("A1", "$A$1")]));
         Assert.Throws<ArgumentException>(() => wb.ReplaceNames([KV("Ok", "$B$1"), KV("ok", "$A$1")]));
-        Assert.Equal(new[] { KV("Rate", "$A$1") }, wb.GetNames());
+        Assert.Equal(new[] { KV("Rate", "Sheet1!$A$1") }, wb.GetNames());
         Assert.False(wb.CanUndo);
     }
 

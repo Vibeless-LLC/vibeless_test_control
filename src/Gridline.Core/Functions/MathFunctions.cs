@@ -156,7 +156,7 @@ internal static class MathFunctions
             {
                 r = range.Rows; c = range.Cols;
                 var top = range.Address.TopLeft;
-                foreach (var (row, col, v) in range.Ctx.EnumerateNonBlank(range.Address))
+                foreach (var (row, col, v) in range.NonBlankCells())
                 {
                     if (v.Kind == ValueKind.Error) { if (firstError.Kind != ValueKind.Error) firstError = v; }
                     else if (v.Kind == ValueKind.Number) map[(row - top.Row, col - top.Col)] = v.Number;

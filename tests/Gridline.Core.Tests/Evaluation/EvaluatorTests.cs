@@ -18,18 +18,23 @@ public class EvaluatorTests
     {
         public Dictionary<(int Row, int Col), CellValue> Cells { get; } = new();
         public Dictionary<string, (RangeAddress Target, bool IsRange)> Names { get; } = new(StringComparer.OrdinalIgnoreCase);
+        public int FormulaSheet => 0;
         public int FormulaRow { get; set; } = 1;
         public int FormulaCol { get; set; } = 1;
 
-        public CellValue GetCellValue(int row, int col) => Cells.TryGetValue((row, col), out var v) ? v : CellValue.Blank;
+        // One sheet (id 0); any qualified sheet name is unknown.
+        public CellValue GetCellValue(int sheet, int row, int col) => Cells.TryGetValue((row, col), out var v) ? v : CellValue.Blank;
 
-        public bool TryResolveName(string name, out RangeAddress target, out bool isRange)
+        public bool TryResolveSheet(string name, out int sheet) { sheet = 0; return false; }
+
+        public bool TryResolveName(string name, out int sheet, out RangeAddress target, out bool isRange)
         {
+            sheet = 0;
             if (Names.TryGetValue(name, out var n)) { target = n.Target; isRange = n.IsRange; return true; }
             target = default; isRange = false; return false;
         }
 
-        public IEnumerable<(int Row, int Col, CellValue Value)> EnumerateNonBlank(RangeAddress range) =>
+        public IEnumerable<(int Row, int Col, CellValue Value)> EnumerateNonBlank(int sheet, RangeAddress range) =>
             Cells.Where(kv => kv.Value.Kind != ValueKind.Blank && range.Contains(new CellAddress(kv.Key.Row, kv.Key.Col)))
                  .OrderBy(kv => kv.Key.Row).ThenBy(kv => kv.Key.Col)
                  .Select(kv => (kv.Key.Row, kv.Key.Col, kv.Value));
@@ -181,7 +186,7 @@ public class EvaluatorTests
     [Fact]
     public void RangeRefGetOutOfBoundsThrows()
     {
-        var r = new RangeRef(RangeAddress.Parse("A1:B2"), new DictContext());
+        var r = new RangeRef(0, RangeAddress.Parse("A1:B2"), new DictContext());
         Assert.Throws<ArgumentOutOfRangeException>(() => r.Get(2, 0));
         Assert.Throws<ArgumentOutOfRangeException>(() => r.Get(0, -1));
     }

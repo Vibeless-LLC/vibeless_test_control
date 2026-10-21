@@ -79,11 +79,11 @@ internal static class ConditionalFunctions
         if (!crit.MatchesBlank)
         {
             // Only non-blank range cells can match: walk them and read the paired sum cell.
-            foreach (var (row, col, v) in ctx.EnumerateNonBlank(range.Address))
+            foreach (var (row, col, v) in range.NonBlankCells())
             {
                 if (!crit.Matches(v)) continue;
                 int sRow = stl.Row + (row - rtl.Row), sCol = stl.Col + (col - rtl.Col);
-                var sv = sRow <= CellAddress.MaxRows && sCol <= CellAddress.MaxColumns ? ctx.GetCellValue(sRow, sCol) : default;
+                var sv = sRow <= CellAddress.MaxRows && sCol <= CellAddress.MaxColumns ? ctx.GetCellValue(sumRange.Sheet, sRow, sCol) : default;
                 if (!Add(sv, out var e)) return e;
             }
         }
@@ -94,9 +94,9 @@ internal static class ConditionalFunctions
             int bottom = Math.Min(CellAddress.MaxRows, stl.Row + range.Rows - 1);
             int right = Math.Min(CellAddress.MaxColumns, stl.Col + range.Cols - 1);
             var region = new RangeAddress(stl, new CellAddress(bottom, right));
-            foreach (var (row, col, sv) in ctx.EnumerateNonBlank(region))
+            foreach (var (row, col, sv) in ctx.EnumerateNonBlank(sumRange.Sheet, region))
             {
-                var rv = ctx.GetCellValue(rtl.Row + (row - stl.Row), rtl.Col + (col - stl.Col));
+                var rv = ctx.GetCellValue(range.Sheet, rtl.Row + (row - stl.Row), rtl.Col + (col - stl.Col));
                 if (!crit.Matches(rv)) continue;
                 if (!Add(sv, out var e)) return e;
             }

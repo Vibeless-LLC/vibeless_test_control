@@ -2,9 +2,10 @@ using Gridline.Core.Addressing;
 
 namespace Gridline.Core.Evaluation;
 
-/// <summary>A normalized rectangular reference handed to functions (§6.5).</summary>
-internal sealed class RangeRef(RangeAddress Address, IEvalContext Ctx)
+/// <summary>A normalized rectangular reference on one sheet (an internal sheet id), handed to functions (§6.5, CR1.2).</summary>
+internal sealed class RangeRef(int Sheet, RangeAddress Address, IEvalContext Ctx)
 {
+    public int Sheet { get; } = Sheet;
     public RangeAddress Address { get; } = Address;
     public IEvalContext Ctx { get; } = Ctx;
 
@@ -19,12 +20,15 @@ internal sealed class RangeRef(RangeAddress Address, IEvalContext Ctx)
         ArgumentOutOfRangeException.ThrowIfNegative(c);
         ArgumentOutOfRangeException.ThrowIfGreaterThanOrEqual(r, Rows);
         ArgumentOutOfRangeException.ThrowIfGreaterThanOrEqual(c, Cols);
-        return Ctx.GetCellValue(Address.TopLeft.Row + r, Address.TopLeft.Col + c);
+        return Ctx.GetCellValue(Sheet, Address.TopLeft.Row + r, Address.TopLeft.Col + c);
     }
+
+    /// <summary>Non-blank cells of the range with their absolute row and column, row-major.</summary>
+    public IEnumerable<(int Row, int Col, CellValue Value)> NonBlankCells() => Ctx.EnumerateNonBlank(Sheet, Address);
 
     /// <summary>Values of non-blank cells, row-major.</summary>
     public IEnumerable<CellValue> NonBlankRowMajor()
     {
-        foreach (var (_, _, v) in Ctx.EnumerateNonBlank(Address)) yield return v;
+        foreach (var (_, _, v) in Ctx.EnumerateNonBlank(Sheet, Address)) yield return v;
     }
 }

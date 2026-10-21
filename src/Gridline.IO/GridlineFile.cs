@@ -9,6 +9,16 @@ public static class GridlineFile
 {
     private const long CurrentVersion = 1;
 
+    /// <summary>
+    /// Version 1 stores unqualified <c>refersTo</c> (§8.1): the sheet prefix that <see cref="Workbook.GetNames"/>
+    /// returns since CR1.4 is dropped. Interim until the v2 writer (CR1.5); a v1 file has one sheet.
+    /// </summary>
+    private static string V1RefersTo(string refersTo)
+    {
+        int bang = refersTo.LastIndexOf('!');
+        return bang < 0 || refersTo == "#REF!" ? refersTo : refersTo[(bang + 1)..];
+    }
+
     /// <summary>Canonical text: LF line endings, trailing newline.</summary>
     public static string Serialize(Workbook wb)
     {
@@ -26,7 +36,7 @@ public static class GridlineFile
                 sb.Append("    ");
                 JsonEscaper.Append(sb, names[i].Key);
                 sb.Append(": ");
-                JsonEscaper.Append(sb, names[i].Value);
+                JsonEscaper.Append(sb, V1RefersTo(names[i].Value));
                 sb.Append(i + 1 < names.Count ? ",\n" : "\n");
             }
             sb.Append("  },\n");

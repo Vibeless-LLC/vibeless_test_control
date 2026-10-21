@@ -17,7 +17,7 @@ public class NamesTests
         var wb = Load([KV("total", "$a$1:$a$10"), KV("Rate", "$B$1"), KV("_z", "$C$1"), KV("alpha", "$c$5:$a$1")]);
         Assert.Equal(
             // OrdinalIgnoreCase compares upper-cased code units: 'A' (0x41) < 'R' < 'T' < '_' (0x5F).
-            new[] { KV("alpha", "$A$1:$C$5"), KV("Rate", "$B$1"), KV("total", "$A$1:$A$10"), KV("_z", "$C$1") },
+            new[] { KV("alpha", "Sheet1!$A$1:$C$5"), KV("Rate", "Sheet1!$B$1"), KV("total", "Sheet1!$A$1:$A$10"), KV("_z", "Sheet1!$C$1") },
             wb.GetNames());
     }
 
@@ -124,7 +124,7 @@ public class NamesTests
         var wb = Load([KV("One", "$A$1:$A$1")], KV("A1", "4"), KV("B1", "=One*2"), KV("B2", "=SUM(One)"));
         Assert.Equal("E:#VALUE!", V(wb, "B1"));
         Assert.Equal("N:4", V(wb, "B2"));
-        Assert.Equal(new[] { KV("One", "$A$1:$A$1") }, wb.GetNames());
+        Assert.Equal(new[] { KV("One", "Sheet1!$A$1:$A$1") }, wb.GetNames());
     }
 
     [Fact]
@@ -132,7 +132,7 @@ public class NamesTests
     {
         var wb = Load([KV("_x", "$A$1")], KV("A1", "4"), KV("B1", "=_x"));
         Assert.Equal("E:#PARSE!", V(wb, "B1")); // §5.1 word tokens start with a letter
-        Assert.Equal(new[] { KV("_x", "$A$1") }, wb.GetNames());
+        Assert.Equal(new[] { KV("_x", "Sheet1!$A$1") }, wb.GetNames());
     }
 
     [Fact]
@@ -168,7 +168,7 @@ public class NamesTests
         Assert.Throws<ArgumentException>(() => wb.DefineName("A1", "$A$1"));
         Assert.False(wb.CanUndo);
         wb.DefineName("R", "$b$1");
-        Assert.Equal("$B$1", wb.GetNames()[0].Value);
+        Assert.Equal("Sheet1!$B$1", wb.GetNames()[0].Value);
     }
 
     [Fact]
@@ -204,7 +204,7 @@ public class NamesTests
         wb.DefineName("R", "$a$1:$a$1");
         wb.SetCell("B1", "=R");
         Assert.Equal("E:#VALUE!", V(wb, "B1"));
-        Assert.Equal("$A$1:$A$1", wb.GetNames()[0].Value);
+        Assert.Equal("Sheet1!$A$1:$A$1", wb.GetNames()[0].Value);
     }
 
     [Fact]
@@ -289,7 +289,7 @@ public class NamesTests
         wb.DefineName("R", "$A$1");
         wb.DefineName("R", "$A$2");
         wb.Undo();
-        Assert.Equal("$A$1", wb.GetNames()[0].Value);
+        Assert.Equal("Sheet1!$A$1", wb.GetNames()[0].Value);
         wb.Undo();
         Assert.Empty(wb.GetNames());
     }
