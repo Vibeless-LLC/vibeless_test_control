@@ -27,9 +27,9 @@ public static class CsvFile
         return CodePagesEncodingProvider.Instance.GetEncoding(1252)!.GetString(bytes);
     }
 
-    public static Workbook Import(ReadOnlySpan<byte> bytes, char delimiter = ',')
+    /// <summary>Decodes and maps CSV bytes to unqualified cell inputs (shared by Import and ImportInto).</summary>
+    private static List<KeyValuePair<string, string>> ReadCells(ReadOnlySpan<byte> bytes, char delimiter)
     {
-        CheckDelimiter(delimiter);
         var records = DelimitedReader.Parse(Decode(bytes), delimiter);
         var cells = new List<KeyValuePair<string, string>>();
         for (int r = 0; r < records.Count; r++)
@@ -41,7 +41,36 @@ public static class CsvFile
                 cells.Add(new(new CellAddress(r + 1, c + 1).ToString(), DelimitedMapping.ToInput(rec[c])));
             }
         }
+        return cells;
+    }
+
+    public static Workbook Import(ReadOnlySpan<byte> bytes, char delimiter = ',')
+    {
+        CheckDelimiter(delimiter);
+        var cells = ReadCells(bytes, delimiter);
         try { return Workbook.FromSnapshot(cells, Array.Empty<KeyValuePair<string, string>>()); }
+        catch (ArgumentException ex) { throw new GridlineFormatException("invalid CSV content: " + ex.Message, ex); }
+    }
+
+    /// <summary>
+    /// Appends a new sheet named <paramref name="sheetName"/> filled from CSV (CR1.6) as one undo step. A bad
+    /// delimiter or an invalid/existing sheet name throws <see cref="ArgumentException"/>; malformed CSV throws
+    /// <see cref="GridlineFormatException"/> and the workbook is unchanged.
+    /// </summary>
+    public static void ImportInto(Workbook wb, string sheetName, Stream source, CsvOptions? options = null)
+    {
+        ArgumentNullException.ThrowIfNull(wb);
+        ArgumentNullException.ThrowIfNull(sheetName);
+        ArgumentNullException.ThrowIfNull(source);
+        char delimiter = (options ?? new CsvOptions()).Delimiter;
+        CheckDelimiter(delimiter);
+        if (!SheetNames.IsValid(sheetName)) throw new ArgumentException($"Invalid sheet name: '{sheetName}'", nameof(sheetName));
+        if (wb.SheetNames.Contains(sheetName, StringComparer.OrdinalIgnoreCase))
+            throw new ArgumentException($"Duplicate sheet name: '{sheetName}'", nameof(sheetName));
+        using var ms = new MemoryStream();
+        source.CopyTo(ms);
+        var cells = ReadCells(ms.GetBuffer().AsSpan(0, (int)ms.Length), delimiter);
+        try { wb.AddSheet(sheetName, null, cells); }
         catch (ArgumentException ex) { throw new GridlineFormatException("invalid CSV content: " + ex.Message, ex); }
     }
 
@@ -51,15 +80,19 @@ public static class CsvFile
         return Import(File.ReadAllBytes(path), delimiter);
     }
 
-    public static byte[] Export(Workbook wb, char delimiter = ',')
+    public static byte[] Export(Workbook wb, char delimiter = ',', string? sheet = null)
     {
         ArgumentNullException.ThrowIfNull(wb);
         CheckDelimiter(delimiter);
+        sheet ??= wb.ActiveSheet;
+        if (!wb.SheetNames.Contains(sheet, StringComparer.OrdinalIgnoreCase))
+            throw new ArgumentException($"Unknown sheet: '{sheet}'", nameof(sheet));
+        string prefix = SheetNames.Format(sheet) + "!";
         var values = new Dictionary<int, CellValue>();
         int maxRow = 0, maxCol = 0;
-        foreach (var addr in wb.GetUsedAddresses())
+        foreach (var addr in wb.GetUsedAddresses(sheet))
         {
-            var v = wb.GetValue(addr);
+            var v = wb.GetValue(prefix + addr);
             if (v.Kind == ValueKind.Blank) continue;
             var a = CellAddress.Parse(addr);
             values[a.Key] = v;
@@ -100,13 +133,13 @@ public static class CsvFile
     }
 
     /// <summary>Writes to a temp file in the same directory, flushes to disk, then replaces the target.</summary>
-    public static void ExportToPath(Workbook wb, string path, char delimiter = ',')
+    public static void ExportToPath(Workbook wb, string path, char delimiter = ',', string? sheet = null)
     {
         ArgumentNullException.ThrowIfNull(wb);
         ArgumentNullException.ThrowIfNull(path);
         CheckDelimiter(delimiter);
         path = Path.GetFullPath(path);
-        var bytes = Export(wb, delimiter);
+        var bytes = Export(wb, delimiter, sheet);
         var tmp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
         try
         {

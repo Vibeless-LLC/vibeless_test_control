@@ -57,8 +57,17 @@ public sealed partial class Workbook
     /// name, <see cref="ArgumentOutOfRangeException"/> for an index outside <c>0..Count</c>, and
     /// <see cref="InvalidOperationException"/> when the workbook already has <see cref="Addressing.SheetNames.MaxSheets"/> sheets.
     /// </summary>
-    public void AddSheet(string name, int? index = null)
+    public void AddSheet(string name, int? index = null) => AddSheet(name, index, []);
+
+    /// <summary>
+    /// Adds a sheet and its cells as ONE commit and one undo step (CR1.6). <paramref name="cells"/> are unqualified
+    /// addresses with their inputs (last duplicate wins); everything is validated before anything changes, so an
+    /// invalid or qualified address or input throws <see cref="ArgumentException"/> and leaves the workbook as it was.
+    /// Other arguments and exceptions as for <see cref="AddSheet(string, int?)"/>.
+    /// </summary>
+    public void AddSheet(string name, int? index, IReadOnlyList<KeyValuePair<string, string>> cells)
     {
+        ArgumentNullException.ThrowIfNull(cells);
         if (!Addressing.SheetNames.IsValid(name)) throw new ArgumentException($"Invalid sheet name: '{name}'", nameof(name));
         if (_sheetsByName.ContainsKey(name)) throw new ArgumentException($"Duplicate sheet name: '{name}'", nameof(name));
         int at = index ?? _sheets.Count;
@@ -67,9 +76,22 @@ public sealed partial class Workbook
         if (_sheets.Count >= Addressing.SheetNames.MaxSheets)
             throw new InvalidOperationException($"A workbook has at most {Addressing.SheetNames.MaxSheets} sheets.");
 
+        var inputs = new Dictionary<int, string>(cells.Count);
+        foreach (var (address, input) in cells)
+        {
+            if (!CellAddress.TryParse(address, out var a))
+                throw new ArgumentException($"Invalid cell address: '{address}'", nameof(cells));
+            ValidateInput(input, nameof(cells));
+            inputs[a.Key] = input;
+        }
+
+        int id = _nextSheetId++;
         var layout = new List<SheetEntry>(Layout());
-        layout.Insert(at, new SheetEntry(_nextSheetId++, name));
-        Commit([], newNames: null, newSheets: layout, record: true);
+        layout.Insert(at, new SheetEntry(id, name));
+        var edits = new List<CellEdit>(inputs.Count);
+        foreach (var (key, input) in inputs) edits.Add(new CellEdit(GlobalKey.Of(id, key), "", input));
+        edits.Sort(static (x, y) => x.Key.CompareTo(y.Key));
+        Commit(edits, newNames: null, newSheets: layout, record: true);
     }
 
     /// <summary>

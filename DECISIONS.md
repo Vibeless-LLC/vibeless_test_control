@@ -285,3 +285,10 @@ Non-trivial implementation choices, with spec section references.
 - CR1.5: v2 structural violations (missing/non-string `activeSheet`, `sheets` missing/empty/not an array, sheet without string `name` or array `cells`) are `GridlineFormatException`; duplicate/invalid sheet names, unknown `activeSheet`, and a name referring to an unknown sheet surface through `ArgumentException` from `Workbook.FromSnapshot`, wrapped as `GridlineFormatException`. Unknown properties are still ignored.
 - CR1.5: `Workbook.FromSnapshot(IReadOnlyList<SheetSnapshot>, names, activeSheet)` takes unqualified cell addresses (a qualified one is invalid), sets the active sheet before parsing names (so an unqualified `refersTo` qualifies with it), and shares the validate-then-recalc tail with the single-sheet overload. More than 255 sheets also throws `ArgumentException`.
 - CR1.5: the undo property test's "incremental equals full recalc" oracle now builds the fresh workbook with the multi-sheet `FromSnapshot` (a real full recalc) instead of replaying through the API.
+
+## CR-1 Task 8 (CSV per sheet)
+
+- CR1.6, §8.5: the CR's `Csv.*` names map to the existing `CsvFile` class (`CsvFile.ImportInto`, `CsvFile.Export(..., sheet)`).
+- CR1.6: `Workbook.AddSheet(name, index, cells)` adds the sheet and its cells in one `Commit` (one undo step); `AddSheet(name, index)` delegates with an empty list. Cell addresses must be unqualified (a qualified one is `ArgumentException`); addresses and inputs are validated before the sheet id is allocated or anything changes; the last duplicate address wins.
+- CR1.6: `ImportInto` checks delimiter and sheet name (invalid/duplicate case-insensitive: `ArgumentException`) before parsing; a malformed CSV (or content `AddSheet` rejects) is `GridlineFormatException` with nothing changed. The active sheet is unchanged. Parsing/mapping is the shared private `ReadCells` also used by `Import`, which still creates `Sheet1`.
+- CR1.6: `Export`/`ExportToPath` take `sheet` (null = active sheet, case-insensitive; unknown: `ArgumentException`); values are read via qualified addresses so the active sheet is never touched.
