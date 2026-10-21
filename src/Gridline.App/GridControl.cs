@@ -49,16 +49,27 @@ public sealed class GridControl : FrameworkElement
         };
     }
 
-    /// <summary>The workbook shown; the control re-renders on its <see cref="Workbook.CellsChanged"/>.</summary>
+    /// <summary>
+    /// The workbook shown (its active sheet: cells are read with unqualified addresses); the control re-renders on its
+    /// <see cref="Workbook.CellsChanged"/> and <see cref="Workbook.SheetsChanged"/> (CR1.8).
+    /// </summary>
     public Workbook? Workbook
     {
         get => _workbook;
         set
         {
             if (ReferenceEquals(_workbook, value)) return;
-            if (_workbook is not null) _workbook.CellsChanged -= OnCellsChanged;
+            if (_workbook is not null)
+            {
+                _workbook.CellsChanged -= OnCellsChanged;
+                _workbook.SheetsChanged -= OnSheetsChanged;
+            }
             _workbook = value;
-            if (_workbook is not null) _workbook.CellsChanged += OnCellsChanged;
+            if (_workbook is not null)
+            {
+                _workbook.CellsChanged += OnCellsChanged;
+                _workbook.SheetsChanged += OnSheetsChanged;
+            }
             InvalidateVisual();
         }
     }
@@ -150,7 +161,10 @@ public sealed class GridControl : FrameworkElement
         ViewportChanged?.Invoke(this, EventArgs.Empty);
     }
 
+    // Addresses may be sheet-qualified (more than one sheet) and may name another sheet; any change re-renders.
     private void OnCellsChanged(object? sender, CellsChangedEventArgs e) => InvalidateVisual();
+
+    private void OnSheetsChanged(object? sender, EventArgs e) => InvalidateVisual();
 
     protected override void OnRenderSizeChanged(SizeChangedInfo sizeInfo)
     {

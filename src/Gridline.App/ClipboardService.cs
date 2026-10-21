@@ -42,6 +42,7 @@ public sealed class ClipboardService
 
     private Workbook? _copiedFrom;
     private RangeAddress _source;
+    private string _sourceSheet = "";
     private string? _lastText;
 
     public ClipboardService(IClipboard clipboard, Func<Workbook?> workbook, Action<TimeSpan>? sleep = null)
@@ -62,6 +63,7 @@ public sealed class ClipboardService
             return ClipboardResult.Fail("The clipboard is busy; copy failed.");
         _copiedFrom = wb;
         _source = range;
+        _sourceSheet = wb.ActiveSheet;
         _lastText = text;
         return tooLarge
             ? new ClipboardResult(true, "Selection too large for the system clipboard; it can be pasted within Gridline only.")
@@ -79,7 +81,9 @@ public sealed class ClipboardService
         {
             if (_lastText is not null && _copiedFrom == wb && string.Equals(text ?? (_lastText.Length == 0 ? "" : null), _lastText, StringComparison.Ordinal))
             {
-                wb.CopyPaste(_source.ToString(), active.ToString());
+                // The source is qualified with the sheet it was copied from, so a paste on another sheet copies across
+                // sheets (CR1.8); a source sheet renamed or deleted since the copy fails as "Cannot paste".
+                wb.CopyPaste(SheetNames.Format(_sourceSheet) + "!" + _source, active.ToString());
                 return ClipboardResult.Ok;
             }
             if (string.IsNullOrEmpty(text)) return ClipboardResult.Fail("Nothing to paste.");
@@ -121,7 +125,7 @@ public sealed class ClipboardService
     {
         tooLarge = false;
         int maxRow = 0, maxCol = 0;
-        foreach (string a in wb.GetUsedAddresses())
+        foreach (string a in wb.GetUsedAddresses(wb.ActiveSheet)) // unqualified, active sheet only (CR1.8)
         {
             var c = CellAddress.Parse(a);
             if (!range.Contains(c)) continue;

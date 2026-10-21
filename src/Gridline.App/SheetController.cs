@@ -10,7 +10,7 @@ namespace Gridline.App;
 /// </summary>
 public sealed class SheetController
 {
-    /// <summary>Ranges up to this many positions are scanned cell by cell; larger ones filter <see cref="Workbook.GetUsedAddresses"/>.</summary>
+    /// <summary>Ranges up to this many positions are scanned cell by cell; larger ones filter the active sheet's used addresses.</summary>
     public const int PositionalScanLimit = 4096;
 
     private Workbook? _workbook;
@@ -77,12 +77,28 @@ public sealed class SheetController
         catch (ArgumentException ex) { error = ex.Message; return false; }
     }
 
-    /// <summary>Name box navigation: a single cell address ([$]COL[$]ROW, any case, surrounding spaces ignored).</summary>
+    /// <summary>
+    /// Name box navigation: a single cell address ([$]COL[$]ROW, any case, surrounding spaces ignored), optionally
+    /// sheet-qualified (CR1.2, CR1.8). A qualified address activates that sheet (case-insensitive) and then selects;
+    /// bad syntax or an unknown sheet returns false and changes nothing.
+    /// </summary>
     public bool TryNavigate(string text)
     {
-        if (!CellAddress.TryParse(text.Trim(), out var a)) return false;
+        if (!QualifiedAddress.TryParseCell(text.Trim(), out var sheet, out var a)) return false;
+        if (sheet is not null)
+        {
+            if (_workbook is not { } wb || !ContainsSheet(wb, sheet)) return false;
+            wb.ActiveSheet = sheet;
+        }
         Selection.MoveTo(a, extend: false);
         return true;
+    }
+
+    private static bool ContainsSheet(Workbook wb, string sheet)
+    {
+        foreach (string n in wb.SheetNames)
+            if (string.Equals(n, sheet, StringComparison.OrdinalIgnoreCase)) return true;
+        return false;
     }
 
     /// <summary>Clears every used cell in the selection with one <see cref="Workbook.ApplyBatch"/>; returns the cell count.</summary>
@@ -131,8 +147,9 @@ public sealed class SheetController
             yield break;
         }
 
-        // Queried fresh on every read (no cache), so results never depend on CellsChanged handler order.
-        foreach (string text in wb.GetUsedAddresses())
+        // Queried fresh on every read (no cache), so results never depend on CellsChanged handler order. The
+        // per-sheet overload returns unqualified addresses of the active sheet only (CR1.8).
+        foreach (string text in wb.GetUsedAddresses(wb.ActiveSheet))
             if (range.Contains(CellAddress.Parse(text))) yield return text;
     }
 }

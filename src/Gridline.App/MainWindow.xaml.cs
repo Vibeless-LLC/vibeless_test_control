@@ -1,7 +1,10 @@
 using System.IO;
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Input;
+using System.Windows.Media;
 using Gridline.Core.Addressing;
 using Microsoft.Win32;
 
@@ -41,6 +44,7 @@ public partial class MainWindow : Window
         _clipboard = new ClipboardService(new WpfClipboard(), () => _session.Workbook);
         Title = _session.Title;
         _session.StateChanged += (_, _) => OnSessionStateChanged();
+        _session.SheetsChanged += (_, _) => SyncSheetTabs();
         if (_recovery is not null)
         {
             _session.Saved += (_, _) => _recovery.Delete();
@@ -58,6 +62,7 @@ public partial class MainWindow : Window
         VScroll.ValueChanged += (_, e) => Sheet.TopRow = (int)Math.Round(e.NewValue);
         HScroll.ValueChanged += (_, e) => Sheet.LeftCol = (int)Math.Round(e.NewValue);
         Loaded += (_, _) => Sheet.Focus();
+        SyncSheetTabs();
         RefreshBars();
     }
 
@@ -356,6 +361,170 @@ public partial class MainWindow : Window
             MessageBox.Show(this, ex.Message, "Gridline", MessageBoxButton.OK, MessageBoxImage.Error);
         }
         RefreshBars();
+    }
+
+    // ---- Sheet tabs (CR1.8) ----
+
+    private const string SheetDragFormat = "Gridline.SheetName";
+    private ToggleButton? _dragTab;
+    private Point _dragStart;
+
+    /// <summary>
+    /// Brings the tab strip in line with the workbook: one <see cref="ToggleButton"/> per sheet (AutomationId
+    /// <c>SheetTab_&lt;index&gt;</c>, Name = sheet name), the active one checked. Existing buttons are reused so a tab
+    /// that raised the change (click, drop) stays in the tree while its handler runs.
+    /// </summary>
+    private void SyncSheetTabs()
+    {
+        var wb = _session.Workbook;
+        var names = wb.SheetNames;
+        string active = wb.ActiveSheet;
+        var children = SheetTabsPanel.Children;
+        while (children.Count > names.Count) children.RemoveAt(children.Count - 1);
+        while (children.Count < names.Count) children.Add(CreateSheetTab());
+        for (int i = 0; i < names.Count; i++)
+        {
+            var tab = (ToggleButton)children[i];
+            tab.Tag = names[i];
+            ((TextBlock)tab.Content).Text = names[i]; // a TextBlock, so '_' in a name is not an access key
+            AutomationProperties.SetAutomationId(tab, "SheetTab_" + i.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            AutomationProperties.SetName(tab, names[i]);
+            tab.IsChecked = string.Equals(names[i], active, StringComparison.Ordinal);
+        }
+    }
+
+    private ToggleButton CreateSheetTab()
+    {
+        // Not focusable: clicking a tab leaves keyboard focus on the grid; pending edits are committed explicitly.
+        var tab = new ToggleButton
+        {
+            Content = new TextBlock(), Focusable = false, AllowDrop = true, MinWidth = 64,
+            Padding = new Thickness(10, 2, 10, 2), Margin = new Thickness(0, 0, 1, 0),
+        };
+        tab.Click += OnSheetTabClick;
+        tab.PreviewMouseLeftButtonDown += OnSheetTabMouseDown;
+        tab.PreviewMouseMove += OnSheetTabMouseMove;
+        tab.DragOver += OnSheetTabDragOver;
+        tab.Drop += OnSheetTabDrop;
+        return tab;
+    }
+
+    private void OnSheetTabClick(object sender, RoutedEventArgs e)
+    {
+        string name = (string)((ToggleButton)sender).Tag;
+        RunSheetOp(() => _session.Workbook.ActiveSheet = name);
+        SyncSheetTabs(); // a click on the active tab toggled it off; re-check it
+    }
+
+    /// <summary>Commits a pending in-cell edit, runs a sheet operation and reports a Core rejection; nothing changes on failure.</summary>
+    private void RunSheetOp(Action op)
+    {
+        if (!CommitPending()) return;
+        if (!SheetTabs.TryRun(op, out var error)) ShowError(error ?? "");
+        Sheet.Focus();
+    }
+
+    private void OnSheetTabMouseDown(object sender, MouseButtonEventArgs e)
+    {
+        _dragTab = (ToggleButton)sender;
+        _dragStart = e.GetPosition(SheetTabsPanel);
+    }
+
+    private void OnSheetTabMouseMove(object sender, MouseEventArgs e)
+    {
+        if (_dragTab is null || !ReferenceEquals(sender, _dragTab)) return;
+        if (e.LeftButton != MouseButtonState.Pressed) { _dragTab = null; return; }
+        var d = e.GetPosition(SheetTabsPanel) - _dragStart;
+        if (Math.Abs(d.X) < SystemParameters.MinimumHorizontalDragDistance
+            && Math.Abs(d.Y) < SystemParameters.MinimumVerticalDragDistance) return;
+        var tab = _dragTab;
+        _dragTab = null;
+        if (!CommitPending()) return;
+        DragDrop.DoDragDrop(tab, new DataObject(SheetDragFormat, (string)tab.Tag), DragDropEffects.Move);
+        tab.ReleaseMouseCapture(); // the button saw no mouse-up, so it must not click afterwards
+    }
+
+    private void OnSheetTabDragOver(object sender, DragEventArgs e)
+    {
+        e.Effects = e.Data.GetDataPresent(SheetDragFormat) ? DragDropEffects.Move : DragDropEffects.None;
+        e.Handled = true;
+    }
+
+    /// <summary>Dropping a tab onto another tab moves the dragged sheet to that tab's index (one undo step).</summary>
+    private void OnSheetTabDrop(object sender, DragEventArgs e)
+    {
+        if (e.Data.GetData(SheetDragFormat) is not string name) return;
+        int target = SheetTabsPanel.Children.IndexOf((UIElement)sender);
+        e.Handled = true;
+        if (target < 0) return;
+        // Applied after the OLE drag loop has unwound.
+        Dispatcher.BeginInvoke(() => RunSheetOp(() => _session.Workbook.MoveSheet(name, target)));
+    }
+
+    /// <summary>
+    /// Tab context menu: acts on the right-clicked tab, or on the active sheet when the click is on the empty strip.
+    /// Delete is disabled with one sheet; Move Left/Right are disabled at the ends.
+    /// </summary>
+    private void OnSheetTabsRightClick(object sender, MouseButtonEventArgs e)
+    {
+        e.Handled = true;
+        if (!CommitPending()) return;
+        var wb = _session.Workbook;
+        var names = wb.SheetNames;
+        string target = TabAt(e.OriginalSource as DependencyObject)?.Tag as string ?? wb.ActiveSheet;
+        int index = IndexOfSheet(names, target);
+
+        var add = MakeSheetItem("_Add Sheet", "SheetAdd", true,
+            () => RunSheetOp(() => _session.Workbook.AddSheet(SheetTabs.NextSheetName(_session.Workbook.SheetNames))));
+        var rename = MakeSheetItem("_Rename...", "SheetRename", true, () => RenameSheet(target));
+        var delete = MakeSheetItem("_Delete", "SheetDelete", SheetTabs.CanDelete(names.Count),
+            () => RunSheetOp(() => _session.Workbook.DeleteSheet(target)));
+        var left = MakeSheetItem("Move _Left", "SheetMoveLeft", SheetTabs.CanMoveLeft(index),
+            () => RunSheetOp(() => _session.Workbook.MoveSheet(target, index - 1)));
+        var right = MakeSheetItem("Move Ri_ght", "SheetMoveRight", SheetTabs.CanMoveRight(index, names.Count),
+            () => RunSheetOp(() => _session.Workbook.MoveSheet(target, index + 1)));
+        var menu = new ContextMenu { PlacementTarget = SheetTabsHost, Placement = PlacementMode.MousePoint };
+        menu.Items.Add(add);
+        menu.Items.Add(rename);
+        menu.Items.Add(delete);
+        menu.Items.Add(new Separator());
+        menu.Items.Add(left);
+        menu.Items.Add(right);
+        menu.Closed += (_, _) => Sheet.Focus();
+        menu.IsOpen = true;
+    }
+
+    private static MenuItem MakeSheetItem(string header, string id, bool enabled, Action action)
+    {
+        var item = new MenuItem { Header = header, Name = id, IsEnabled = enabled };
+        AutomationProperties.SetAutomationId(item, id);
+        item.Click += (_, _) => action();
+        return item;
+    }
+
+    private void RenameSheet(string target)
+    {
+        if (!CommitPending()) return;
+        string? name = new SheetRenameDialog(this, target).Ask();
+        if (name is not null) RunSheetOp(() => _session.Workbook.RenameSheet(target, name));
+        else Sheet.Focus();
+    }
+
+    private ToggleButton? TabAt(DependencyObject? d)
+    {
+        while (d is not null)
+        {
+            if (d is ToggleButton tb && ReferenceEquals(VisualTreeHelper.GetParent(tb), SheetTabsPanel)) return tb;
+            d = d is Visual ? VisualTreeHelper.GetParent(d) : LogicalTreeHelper.GetParent(d);
+        }
+        return null;
+    }
+
+    private static int IndexOfSheet(IReadOnlyList<string> names, string name)
+    {
+        for (int i = 0; i < names.Count; i++)
+            if (string.Equals(names[i], name, StringComparison.OrdinalIgnoreCase)) return i;
+        return -1;
     }
 
     private void ShowError(string message) =>

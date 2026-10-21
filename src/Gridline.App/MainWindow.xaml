@@ -68,6 +68,14 @@
                 <TextBlock x:Name="ClipboardStatus" AutomationProperties.AutomationId="ClipboardStatus" />
             </StatusBarItem>
         </StatusBar>
+        <!-- Sheet tab strip (CR1.8): docked after the status bar, so it sits below the grid and above the status bar.
+             Tabs (SheetTab_<index>) are rebuilt in code on SheetsChanged. -->
+        <ScrollViewer x:Name="SheetTabsHost" DockPanel.Dock="Bottom" Background="#F3F3F3"
+                      HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled"
+                      AutomationProperties.AutomationId="SheetTabs"
+                      MouseRightButtonUp="OnSheetTabsRightClick">
+            <StackPanel x:Name="SheetTabsPanel" Orientation="Horizontal" Background="Transparent" MinHeight="24" />
+        </ScrollViewer>
         <Grid x:Name="GridHost">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*" />

@@ -14,7 +14,7 @@ public sealed class DocumentSession
     public DocumentSession()
     {
         _workbook = new Workbook();
-        _workbook.CellsChanged += OnCellsChanged;
+        Subscribe(_workbook);
     }
 
     public Guid SessionId { get; } = Guid.NewGuid();
@@ -33,6 +33,12 @@ public sealed class DocumentSession
 
     /// <summary>Raised on any dirty, title or workbook change.</summary>
     public event EventHandler? StateChanged;
+
+    /// <summary>
+    /// Raised when the sheet list, order, names or active sheet changed, or the workbook was replaced (CR1.8); followed
+    /// by <see cref="StateChanged"/>.
+    /// </summary>
+    public event EventHandler? SheetsChanged;
 
     /// <summary>Raised after a successful Save or Save As.</summary>
     public event EventHandler? Saved;
@@ -116,13 +122,29 @@ public sealed class DocumentSession
     private void Replace(Workbook wb, string? path, bool recovered = false)
     {
         _workbook.CellsChanged -= OnCellsChanged;
+        _workbook.SheetsChanged -= OnSheetsChanged;
         _workbook = wb;
-        _workbook.CellsChanged += OnCellsChanged;
+        Subscribe(_workbook);
         _filePath = path;
         _recovered = recovered;
+        SheetsChanged?.Invoke(this, EventArgs.Empty);
         StateChanged?.Invoke(this, EventArgs.Empty);
     }
 
+    private void Subscribe(Workbook wb)
+    {
+        wb.CellsChanged += OnCellsChanged;
+        wb.SheetsChanged += OnSheetsChanged;
+    }
+
+    // Addresses may be sheet-qualified (more than one sheet); the session only needs "something changed".
     private void OnCellsChanged(object? sender, CellsChangedEventArgs e) =>
         StateChanged?.Invoke(this, EventArgs.Empty);
+
+    /// <summary>Sheet list, order, names or active sheet changed (CR1.8): the title and views refresh; activating a sheet does not dirty.</summary>
+    private void OnSheetsChanged(object? sender, EventArgs e)
+    {
+        SheetsChanged?.Invoke(this, EventArgs.Empty);
+        StateChanged?.Invoke(this, EventArgs.Empty);
+    }
 }
