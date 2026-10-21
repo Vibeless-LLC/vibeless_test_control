@@ -101,6 +101,93 @@ public class SheetEditTests
         Assert.Equal(f, wb.GetInput("A1"));
     }
 
+    // CR1.9 (P-8) rename fast path: rewritten formulas keep their values (no re-evaluation), their rewritten ASTs are
+    // installed without re-parsing, and graph registrations whose targets are unchanged are kept.
+
+    [Fact]
+    public void RenameSheet_RewrittenFormulasKeepValuesWithoutReevaluation()
+    {
+        var wb = new Workbook(); wb.AddSheet("Data");
+        wb.SetCell("Data!A1", "2"); wb.SetCell("Data!A2", "3"); wb.SetCell("Data!B1", "1");
+        wb.DefineName("Rate", "Data!$B$1");
+        wb.SetCell("A1", "= SUM( data!A1:A2 ) * Rate + IF(Data!B1>0, 1, 2)");
+        wb.SetCell("A2", "=A1*10");
+        wb.RenameSheet("Data", "Facts");
+        Assert.Equal(0, wb.LastRecalc.EvaluatedFormulaCount);
+        Assert.Equal("=SUM(Facts!A1:A2)*Rate+IF(Facts!B1>0,1,2)", wb.GetInput("A1"));
+        Assert.Equal("N:6", V(wb, "A1"));
+        Assert.Equal("N:60", V(wb, "A2"));
+        // The kept registrations still drive recalculation: a range cell, a direct ref and the name's target.
+        wb.SetCell("Facts!A2", "4"); Assert.Equal("N:7", V(wb, "A1")); Assert.Equal("N:70", V(wb, "A2"));
+        wb.SetCell("Facts!B1", "2"); Assert.Equal("N:13", V(wb, "A1"));
+        wb.SetCell("Facts!B1", "-1"); Assert.Equal("N:-4", V(wb, "A1"));
+        // The installed AST is the parse of the printed text: re-entering the text gives the same value.
+        wb.SetCell("B1", wb.GetInput("A1")); Assert.Equal(V(wb, "A1"), V(wb, "B1"));
+        wb.Undo(); wb.Undo(); wb.Undo(); wb.Undo(); wb.Undo();
+        Assert.Equal("= SUM( data!A1:A2 ) * Rate + IF(Data!B1>0, 1, 2)", wb.GetInput("A1"));
+        Assert.Equal("N:6", V(wb, "A1"));
+        wb.SetCell("Data!A1", "5"); Assert.Equal("N:9", V(wb, "A1")); Assert.Equal("N:90", V(wb, "A2"));
+    }
+
+    [Fact]
+    public void RenameSheet_FormulaNamingOldAndDanglingNewName_IsReevaluated()
+    {
+        var wb = new Workbook(); wb.AddSheet("Data");
+        wb.SetCell("Data!A1", "4");
+        wb.SetCell("A1", "=Data!A1+Later!A1");
+        wb.SetCell("A2", "=A1+1");
+        wb.SetCell("A3", "=Data!A1");
+        Assert.Equal("E:#REF!", V(wb, "A1"));
+        wb.RenameSheet("Data", "Later");
+        Assert.Equal("=Later!A1+Later!A1", wb.GetInput("A1"));
+        Assert.Equal("N:8", V(wb, "A1"));
+        Assert.Equal("N:9", V(wb, "A2"));
+        Assert.Equal("N:4", V(wb, "A3"));
+        Assert.Equal(2, wb.LastRecalc.EvaluatedFormulaCount); // A1 (was dangling) and its dependent A2; not A3
+        wb.SetCell("Later!A1", "5"); Assert.Equal("N:10", V(wb, "A1")); Assert.Equal("N:5", V(wb, "A3"));
+        wb.Undo(); wb.Undo();
+        Assert.Equal("=Data!A1+Later!A1", wb.GetInput("A1"));
+        Assert.Equal("E:#REF!", V(wb, "A1"));
+        Assert.Equal("E:#REF!", V(wb, "A2"));
+        Assert.Equal("N:4", V(wb, "A3"));
+        wb.Redo();
+        Assert.Equal("N:8", V(wb, "A1"));
+    }
+
+    [Fact]
+    public void RenameSheet_Twice_ThenDelete_FollowsTheSheetNameIndex()
+    {
+        var wb = new Workbook(); wb.AddSheet("Data");
+        wb.SetCell("Data!A1", "1");
+        wb.SetCell("A1", "=Data!A1+Data!A1:A2");
+        wb.SetCell("A2", "=SUM(Data!A1:A2)");
+        wb.RenameSheet("Data", "X");
+        wb.RenameSheet("x", "Y");
+        Assert.Equal("=Y!A1+Y!A1:A2", wb.GetInput("A1"));
+        Assert.Equal("=SUM(Y!A1:A2)", wb.GetInput("A2"));
+        wb.SetCell("Y!A2", "2"); Assert.Equal("N:3", V(wb, "A2"));
+        // A sheet named like a former name stays unrelated; deleting Y rewrites through the updated index.
+        wb.AddSheet("Data"); wb.SetCell("Data!A1", "100");
+        Assert.Equal("N:3", V(wb, "A2"));
+        wb.DeleteSheet("Y");
+        Assert.Equal("=SUM(#REF!)", wb.GetInput("A2"));
+        Assert.Equal("E:#REF!", V(wb, "A2"));
+    }
+
+    [Fact]
+    public void RenameSheet_CaseOnly_KeepsRegistrations()
+    {
+        var wb = new Workbook(); wb.AddSheet("Data");
+        wb.SetCell("Data!A1", "1");
+        wb.SetCell("A1", "=data!A1*2");
+        wb.RenameSheet("Data", "DATA");
+        Assert.Equal(0, wb.LastRecalc.EvaluatedFormulaCount);
+        wb.SetCell("DATA!A1", "3");
+        Assert.Equal("N:6", V(wb, "A1"));
+        wb.RenameSheet("data", "Other");
+        Assert.Equal("=Other!A1*2", wb.GetInput("A1"));
+    }
+
     [Fact]
     public void DeleteSheet_UndoRestoresVerbatimNamesAndPosition()
     {

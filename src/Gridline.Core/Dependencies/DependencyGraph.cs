@@ -74,11 +74,66 @@ internal sealed class DependencyGraph
     /// </summary>
     public void SetDependencies(long formulaKey, FormulaDeps? deps, Func<string, int?> resolveSheet)
     {
+        if (deps is not null && _deps.TryGetValue(formulaKey, out var prev))
+        {
+            var next = new Registration(deps, Resolve(deps, resolveSheet));
+            if (SameTargets(prev, next))
+            {
+                // Only the spelling of sheet names changed (a sheet rename, CR1.9 P-8): the cell, range and name
+                // registrations stay; the sheet-name index and the stored deps follow the new spelling.
+                ReindexSheetNames(formulaKey, prev.Deps, next.Deps);
+                _deps[formulaKey] = next;
+                return;
+            }
+        }
         if (_deps.Remove(formulaKey, out var old)) Apply(formulaKey, old, add: false);
         if (deps is null) return;
         var reg = new Registration(deps, Resolve(deps, resolveSheet));
         _deps[formulaKey] = reg;
         Apply(formulaKey, reg, add: true);
+    }
+
+    /// <summary>
+    /// True when two registrations register exactly the same graph entries: the same cell keys, ranges and names in
+    /// the same order, the same refs qualified, and each qualified ref resolved to the same sheet id. Sheet-name
+    /// spelling may differ. Formulas with many qualified refs answer false (the full path is used for them).
+    /// </summary>
+    private static bool SameTargets(Registration a, Registration b)
+    {
+        const int MaxQualified = 32;
+        FormulaDeps x = a.Deps, y = b.Deps;
+        if (x.Cells.Count != y.Cells.Count || x.Ranges.Count != y.Ranges.Count || x.Names.Count != y.Names.Count) return false;
+        if (a.Resolved is null || b.Resolved is null || a.Resolved.Length > MaxQualified) return false;
+        if (!a.Resolved.AsSpan().SequenceEqual(b.Resolved)) return false;
+        for (int i = 0; i < x.Cells.Count; i++)
+            if (x.Cells[i].Key != y.Cells[i].Key || (x.Cells[i].Sheet is null) != (y.Cells[i].Sheet is null)) return false;
+        for (int i = 0; i < x.Ranges.Count; i++)
+            if (x.Ranges[i].Range != y.Ranges[i].Range || (x.Ranges[i].Sheet is null) != (y.Ranges[i].Sheet is null)) return false;
+        for (int i = 0; i < x.Names.Count; i++)
+            if (!string.Equals(x.Names[i], y.Names[i], StringComparison.Ordinal)) return false;
+        return true;
+    }
+
+    /// <summary>Moves <paramref name="f"/> in the sheet-name index from the names only <paramref name="from"/> qualifies with to those only <paramref name="to"/> does.</summary>
+    private void ReindexSheetNames(long f, FormulaDeps from, FormulaDeps to)
+    {
+        foreach (string n in QualifiedSheets(from))
+            if (!Qualifies(to, n)) SheetRef(n, f, add: false);
+        foreach (string n in QualifiedSheets(to))
+            if (!Qualifies(from, n)) SheetRef(n, f, add: true);
+    }
+
+    private static IEnumerable<string> QualifiedSheets(FormulaDeps d)
+    {
+        foreach (var c in d.Cells) if (c.Sheet is { } s) yield return s;
+        foreach (var r in d.Ranges) if (r.Sheet is { } s) yield return s;
+    }
+
+    private static bool Qualifies(FormulaDeps d, string sheet)
+    {
+        foreach (var c in d.Cells) if (c.Sheet is { } s && s.Equals(sheet, StringComparison.OrdinalIgnoreCase)) return true;
+        foreach (var r in d.Ranges) if (r.Sheet is { } s && s.Equals(sheet, StringComparison.OrdinalIgnoreCase)) return true;
+        return false;
     }
 
     /// <summary>
@@ -104,9 +159,10 @@ internal sealed class DependencyGraph
 
     /// <summary>
     /// Re-resolves and re-registers every formula in <see cref="FormulasReferencingSheet"/> for the name (after that
-    /// name started or stopped existing, or changed id) and returns them in ascending key order.
+    /// name started or stopped existing, or changed id) and returns them in ascending key order. Formulas in
+    /// <paramref name="alreadyRegistered"/> were registered against the current sheets already and are only returned.
     /// </summary>
-    public IReadOnlyList<long> Rebind(string upperSheetName, Func<string, int?> resolveSheet)
+    public IReadOnlyList<long> Rebind(string upperSheetName, Func<string, int?> resolveSheet, IReadOnlySet<long>? alreadyRegistered = null)
     {
         if (!_sheetRefs.TryGetValue(upperSheetName, out var set)) return [];
         var formulas = new long[set.Count];
@@ -114,6 +170,7 @@ internal sealed class DependencyGraph
         Array.Sort(formulas);
         foreach (long f in formulas)
         {
+            if (alreadyRegistered is not null && alreadyRegistered.Contains(f)) continue;
             var old = _deps[f];
             Apply(f, old, add: false);
             var reg = new Registration(old.Deps, Resolve(old.Deps, resolveSheet));

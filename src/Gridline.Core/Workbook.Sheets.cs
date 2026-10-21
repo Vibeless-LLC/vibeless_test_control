@@ -114,14 +114,18 @@ public sealed partial class Workbook
             upper.Equals(newName, StringComparison.OrdinalIgnoreCase) ? newName
             : upper.Equals(old, StringComparison.OrdinalIgnoreCase) ? null
             : SheetCasing(upper);
+        var roots = new Dictionary<long, Node>();
         var edits = RewriteFormulasReferencing(old, skipSheet: null,
-            (Node r, out bool c) => ReferenceRewriter.RenameSheet(r, old, newName, out c), NewCasing);
+            (Node r, out bool c) => ReferenceRewriter.RenameSheet(r, old, newName, out c), NewCasing, roots);
 
         var layout = Layout();
         int at = _sheets.IndexOf(sheet);
         layout[at] = layout[at] with { Name = newName };
         // Names store the sheet id, so their refersTo is re-formatted from the new name without a name edit.
-        Commit(edits, newNames: null, newSheets: layout, record: true);
+        // A rewritten reference still points at the same sheet id, so rewritten formulas keep their values; only
+        // formulas that already named newName (dangling until now) are re-evaluated, via the rebind. The rewritten
+        // ASTs are installed as they are, without re-parsing the printed texts (CR1.9, P-8).
+        Commit(edits, newNames: null, newSheets: layout, record: true, editsKeepValues: true, rewrittenRoots: roots);
     }
 
     /// <summary>

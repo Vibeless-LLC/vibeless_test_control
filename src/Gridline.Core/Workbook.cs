@@ -371,9 +371,15 @@ public sealed partial class Workbook
     /// stopped existing, then plans and evaluates once. Raises <see cref="SheetsChanged"/> and
     /// <see cref="CellsChanged"/> once each when relevant, and pushes one undo step when <paramref name="record"/>
     /// is true. <see cref="LastRecalc"/> is always set (0 when nothing changed).
+    /// <paramref name="editsKeepValues"/> (CR1.9, P-8): the edits only re-spell references that point at the same
+    /// cells after the commit (a sheet rename), so each edited formula keeps its value and is not a plan root;
+    /// formulas that start or stop resolving are still roots through the rebind of step 5.
+    /// <paramref name="rewrittenRoots"/> (CR1.9, P-8): for these keys the edit's <c>NewInput</c> is the printed form of
+    /// the given AST, which is installed as the cell's formula instead of re-parsing the text.
     /// </summary>
     private void Commit(IReadOnlyList<CellEdit> edits, IReadOnlyList<KeyValuePair<string, string>>? newNames,
-        IReadOnlyList<SheetEntry>? newSheets, bool record)
+        IReadOnlyList<SheetEntry>? newSheets, bool record, bool editsKeepValues = false,
+        IReadOnlyDictionary<long, Node>? rewrittenRoots = null)
     {
         var real = new List<CellEdit>(edits.Count);
         foreach (var e in edits)
@@ -405,6 +411,15 @@ public sealed partial class Workbook
         int activeBefore = _activeId;
         List<string> existenceChanged = newSheets is null ? [] : InstallLayout(newSheets);
 
+        // With editsKeepValues, only formulas that name a changed sheet both before and after the edits can change
+        // value through the rebind (a rewritten reference keeps pointing at the same cells): snapshot "before".
+        Dictionary<string, HashSet<long>>? namedBefore = null;
+        if (editsKeepValues)
+        {
+            namedBefore = new Dictionary<string, HashSet<long>>(existenceChanged.Count, StringComparer.Ordinal);
+            foreach (string upper in existenceChanged) namedBefore[upper] = [.. _graph.FormulasReferencingSheet(upper)];
+        }
+
         // 2. Cell edits, grouped per sheet store.
         var changed = new List<long>(real.Count);
         var keys = new long[real.Count];
@@ -416,7 +431,8 @@ public sealed partial class Workbook
             int sheet = GlobalKey.Sheet(g);
             if (!writes.TryGetValue(sheet, out var list)) writes[sheet] = list = [];
             // Keys are distinct: reads see the old store.
-            list.Add((GlobalKey.Cell(g), Prepare(g, real[i].NewInput)));
+            var root = rewrittenRoots is not null && rewrittenRoots.TryGetValue(g, out var r) ? r : null;
+            list.Add((GlobalKey.Cell(g), Prepare(g, real[i].NewInput, root)));
             changed.Add(g);
         }
         foreach (var (sheet, list) in writes) SheetById(sheet).Store.SetMany(list);
@@ -428,13 +444,18 @@ public sealed partial class Workbook
         DropRemovedSheets();
 
         // 5. Rebind formulas naming a sheet whose existence (or id) changed; they are re-evaluated regardless.
+        // Edited formulas were registered against the new layout by Prepare, so the rebind skips them.
         var extraRoots = new List<long>();
-        foreach (string upper in existenceChanged)
-            foreach (long f in _graph.Rebind(upper, _resolveSheet))
-                if (IsFormula(f)) extraRoots.Add(f);
+        if (existenceChanged.Count > 0)
+        {
+            var edited = new HashSet<long>(keys);
+            foreach (string upper in existenceChanged)
+                foreach (long f in _graph.Rebind(upper, _resolveSheet, edited))
+                    if ((namedBefore is null || namedBefore[upper].Contains(f)) && IsFormula(f)) extraRoots.Add(f);
+        }
 
         // 6. The graph is fully updated before planning and is not touched while the plan is produced or evaluated.
-        var plan = _planner.Plan(keys, changedNames, extraRoots, _isFormula);
+        var plan = _planner.Plan(editsKeepValues ? [] : keys, changedNames, extraRoots, _isFormula);
         LastRecalc = new RecalcStats(Evaluate(plan, changed));
 
         // History/dirty state is final before handlers run (they may read IsDirty/CanUndo, or throw).
@@ -494,12 +515,13 @@ public sealed partial class Workbook
     /// <summary>
     /// Interprets one input and updates the dependency graph for <paramref name="key"/>; the caller stores the
     /// returned cell (null = blank). A formula starts from the key's previous value so recalc can tell whether it
-    /// changed.
+    /// changed. With <paramref name="formulaRoot"/>, <paramref name="input"/> is that AST's printed formula and the
+    /// AST is used as its parse (CR1.9, P-8).
     /// </summary>
-    private Cell? Prepare(long key, string input)
+    private Cell? Prepare(long key, string input, Node? formulaRoot = null)
     {
         bool hadCell = SheetById(GlobalKey.Sheet(key)).Store.TryGet(GlobalKey.Cell(key), out var old);
-        var cell = InputInterpreter.Interpret(input, _arity);
+        var cell = formulaRoot is null ? InputInterpreter.Interpret(input, _arity) : InputInterpreter.FromFormula(input, formulaRoot);
 
         if (cell is { Kind: CellKind.Formula })
         {

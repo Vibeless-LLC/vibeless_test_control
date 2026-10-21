@@ -159,9 +159,11 @@ public sealed partial class Workbook
     /// <paramref name="sheetName"/> (from the graph's sheet-name index, CR1.2) and that <paramref name="rewrite"/>
     /// changes, skipping formulas on <paramref name="skipSheet"/>. Printed with <paramref name="sheetCasing"/>.
     /// Throws <see cref="InvalidOperationException"/> (nothing changed yet) when a result exceeds
-    /// <see cref="MaxInputLength"/>.
+    /// <see cref="MaxInputLength"/>. When <paramref name="rewrittenRoots"/> is given, each edit's rewritten AST is
+    /// added to it, so <see cref="Commit"/> can install the formula without re-parsing the printed text (CR1.9, P-8).
     /// </summary>
-    private List<CellEdit> RewriteFormulasReferencing(string sheetName, int? skipSheet, FormulaRewrite rewrite, Func<string, string?> sheetCasing)
+    private List<CellEdit> RewriteFormulasReferencing(string sheetName, int? skipSheet, FormulaRewrite rewrite,
+        Func<string, string?> sheetCasing, Dictionary<long, Node>? rewrittenRoots = null)
     {
         // The index entry is live: copy it before anything can mutate the graph.
         var formulas = _graph.FormulasReferencingSheet(sheetName.ToUpperInvariant()).ToArray();
@@ -178,6 +180,7 @@ public sealed partial class Workbook
             if (text.Length > MaxInputLength)
                 throw new InvalidOperationException($"A rewritten formula would exceed {MaxInputLength} characters (cell {FormatAddress(SheetById(sid), GlobalKey.Cell(g))}).");
             edits.Add(new CellEdit(g, cell.Input, text));
+            rewrittenRoots?.Add(g, rewritten);
         }
         return edits;
     }

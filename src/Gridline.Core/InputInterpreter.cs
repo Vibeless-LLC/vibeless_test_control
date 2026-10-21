@@ -14,11 +14,7 @@ internal static class InputInterpreter
     {
         if (input.Length == 0) return null;                                    // 1. blank
 
-        if (input[0] == '=')                                                   // 2. formula
-        {
-            var parsed = Parser.Parse(input[1..], arity);
-            return new Cell(input, CellKind.Formula, parsed, CellValue.Blank, DependencyExtractor.Extract(parsed));
-        }
+        if (input[0] == '=') return FromFormula(input, Parser.Parse(input[1..], arity)); // 2. formula
 
         if (input[0] == '\'')                                                  // 3. text after apostrophe
             return new Cell(input, CellKind.Text, null, CellValue.FromText(input[1..]), null);
@@ -33,4 +29,13 @@ internal static class InputInterpreter
 
         return new Cell(input, CellKind.Text, null, CellValue.FromText(input), null); // 6. text verbatim
     }
+
+    /// <summary>
+    /// The formula cell for <paramref name="input"/> whose parse is the (error-free) <paramref name="root"/>: used
+    /// when <paramref name="input"/> was printed from <paramref name="root"/>, so re-parsing it is skipped (CR1.9, P-8).
+    /// </summary>
+    public static Cell FromFormula(string input, Node root) => FromFormula(input, new ParsedFormula(root, IsParseError: false));
+
+    private static Cell FromFormula(string input, ParsedFormula parsed) =>
+        new(input, CellKind.Formula, parsed, CellValue.Blank, DependencyExtractor.Extract(parsed));
 }
