@@ -1,8 +1,10 @@
 using Gridline.Core.Addressing;
+using Gridline.Core.Commands;
+using Gridline.Core.Parsing;
 
 namespace Gridline.Core;
 
-/// <summary>Sheet list, active sheet and qualified addresses (CR1.1–CR1.3).</summary>
+/// <summary>Sheet list, active sheet, add/rename/delete/move of sheets and qualified addresses (CR1.1–CR1.3).</summary>
 public sealed partial class Workbook
 {
     private const string DefaultSheetName = "Sheet1";
@@ -86,6 +88,75 @@ public sealed partial class Workbook
         layout.RemoveAt(from);
         layout.Insert(newIndex, entry);
         Commit([], newNames: null, newSheets: layout, record: true);
+    }
+
+    /// <summary>
+    /// Renames a sheet (case-insensitive <paramref name="oldName"/>) as one undo step (CR1.3). Every formula that
+    /// qualifies a reference with the old name is rewritten to the new name and re-emitted per §5.5 (undo restores
+    /// the verbatim texts); names follow the sheet, so their <c>refersTo</c> shows the new name. A reference that
+    /// already named <paramref name="newName"/> (a missing sheet) now resolves. A case-only rename is allowed; an
+    /// identical name is a no-op (no step). Unknown old name, or an invalid or duplicate new name →
+    /// <see cref="ArgumentException"/>; a rewritten formula over <see cref="MaxInputLength"/> →
+    /// <see cref="InvalidOperationException"/>, with no change.
+    /// </summary>
+    public void RenameSheet(string oldName, string newName)
+    {
+        var sheet = SheetByName(oldName, nameof(oldName));
+        ArgumentNullException.ThrowIfNull(newName);
+        if (!Addressing.SheetNames.IsValid(newName)) throw new ArgumentException($"Invalid sheet name: '{newName}'", nameof(newName));
+        if (_sheetsByName.TryGetValue(newName, out var other) && other.Id != sheet.Id)
+            throw new ArgumentException($"Duplicate sheet name: '{newName}'", nameof(newName));
+        if (string.Equals(sheet.Name, newName, StringComparison.Ordinal)) return;
+
+        string old = sheet.Name;
+        // Casing in the new layout: the new name in its own casing, the old name gone (unless case-only).
+        string? NewCasing(string upper) =>
+            upper.Equals(newName, StringComparison.OrdinalIgnoreCase) ? newName
+            : upper.Equals(old, StringComparison.OrdinalIgnoreCase) ? null
+            : SheetCasing(upper);
+        var edits = RewriteFormulasReferencing(old, skipSheet: null,
+            (Node r, out bool c) => ReferenceRewriter.RenameSheet(r, old, newName, out c), NewCasing);
+
+        var layout = Layout();
+        int at = _sheets.IndexOf(sheet);
+        layout[at] = layout[at] with { Name = newName };
+        // Names store the sheet id, so their refersTo is re-formatted from the new name without a name edit.
+        Commit(edits, newNames: null, newSheets: layout, record: true);
+    }
+
+    /// <summary>
+    /// Deletes a sheet (case-insensitive name) as one undo step (CR1.3): its cells are cleared, every formula on
+    /// another sheet that qualifies a reference with its name has those references replaced by <c>#REF!</c> and is
+    /// re-emitted per §5.5, and names pointing into it get <c>refersTo = #REF!</c>. If it was active, the sheet now at
+    /// its index (else the last) becomes active. Undo restores its cells and position, the verbatim formula texts and
+    /// the names. Unknown name → <see cref="ArgumentException"/>; the last sheet → <see cref="InvalidOperationException"/>;
+    /// a rewritten formula over <see cref="MaxInputLength"/> → <see cref="InvalidOperationException"/>, with no change.
+    /// </summary>
+    public void DeleteSheet(string name)
+    {
+        var sheet = SheetByName(name, nameof(name));
+        if (_sheets.Count == 1) throw new InvalidOperationException("The last sheet of a workbook cannot be deleted.");
+        int sid = sheet.Id;
+        string old = sheet.Name;
+
+        var edits = RewriteFormulasReferencing(old, skipSheet: sid,
+            (Node r, out bool c) => ReferenceRewriter.RenameSheet(r, old, null, out c), SheetCasing);
+        foreach (var (key, cell) in sheet.Store.All) edits.Add(new CellEdit(GlobalKey.Of(sid, key), cell.Input, ""));
+        edits.Sort(static (x, y) => x.Key.CompareTo(y.Key));
+
+        // Names pointing into the sheet become #REF! (CR1.3); the others are passed through unchanged.
+        KeyValuePair<string, string>[]? names = null;
+        if (_names.Values.Any(d => d.SheetId == sid))
+        {
+            var current = GetNames();
+            names = new KeyValuePair<string, string>[current.Count];
+            for (int i = 0; i < current.Count; i++)
+                names[i] = _names[current[i].Key].SheetId == sid ? new(current[i].Key, ErrorCodes.Ref) : current[i];
+        }
+
+        var layout = new List<SheetEntry>(Layout());
+        layout.RemoveAt(_sheets.IndexOf(sheet));
+        Commit(edits, names, layout, record: true);
     }
 
     /// <summary>

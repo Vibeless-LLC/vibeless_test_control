@@ -9,9 +9,13 @@ public class UndoProperties
 {
     private static readonly string[] Pool = ["A1", "B1", "C1", "A2", "B2", "C2", "A3", "B3", "C3"];
 
-    // Sheets the generator may add (CR1.1); "My Data" needs quoting. Ops on a sheet that does not exist yet are
-    // skipped at run time (ArgumentException, no change).
+    // Sheets the generator may add, rename or delete (CR1.1, CR1.3); "My Data" needs quoting. Sheet1 is never
+    // renamed or deleted. An op naming a sheet that does not exist (or a duplicate name on add/rename) must throw
+    // ArgumentException and change nothing; every other op must succeed (see Expect).
     private static readonly string[] SheetPool = ["Data", "My Data", "S3"];
+
+    // Rename targets include case-only variants of pool names.
+    private static readonly string[] RenamePool = ["Data", "My Data", "S3", "DATA", "my data"];
 
     // Formulas reference the pool, so ops cause recalcs, ranges, and cycles (e.g. =SUM(A1:C3) inside the pool).
     private static readonly string[] Inputs =
@@ -22,9 +26,9 @@ public class UndoProperties
     /// One op: "Set" (a SetCell, one edit), "Batch" (an ApplyBatch of 0..6 edits; addresses may repeat, any case)
     /// "Paste" (CopyPaste; Edits[0] = (source range, destination)) or "Save" (MarkSaved, no edits).
     /// </summary>
-    public sealed record Op(string Kind, (string Address, string Input)[] Edits)
+    public sealed record Op(string Kind, (string Address, string Input)[] Edits, string? Sheet = null)
     {
-        public override string ToString() => Kind + "[" + string.Join(", ", Edits.Select(e => e.Address + "=" + e.Input)) + "]";
+        public override string ToString() => Kind + (Sheet is null ? "" : "@" + Sheet) + "[" + string.Join(", ", Edits.Select(e => e.Address + "=" + e.Input)) + "]";
     }
 
     private static readonly Gen<string> Address =
@@ -65,38 +69,75 @@ public class UndoProperties
         (2, Gen.Elements(SheetPool).SelectMany(n => Gen.Choose(-1, 3).Select(i => new Op("AddSheet", [(n, i.ToString(System.Globalization.CultureInfo.InvariantCulture))])))),
         (1, Gen.Elements(SheetPool.Append("Sheet1").ToArray()).SelectMany(n => Gen.Choose(0, 3).Select(i => new Op("MoveSheet", [(n, i.ToString(System.Globalization.CultureInfo.InvariantCulture))])))),
         (1, Gen.Elements(SheetPool.Append("Sheet1").ToArray()).Select(n => new Op("Activate", [(n, "")]))),
-        (3, Gen.Elements(SheetPool.Append("sheet1").ToArray()).SelectMany(sh => EditGen.Select(e => new Op("Set", [(Gridline.Core.Addressing.SheetNames.Format(sh) + "!" + e.Item1, e.Item2)])))),
+        (3, Gen.Elements(SheetPool.Append("sheet1").ToArray()).SelectMany(sh => EditGen.Select(e => new Op("Set", [(Gridline.Core.Addressing.SheetNames.Format(sh) + "!" + e.Item1, e.Item2)], sh)))),
+        (1, Gen.Elements(SheetPool).SelectMany(o => Gen.Elements(RenamePool).Select(n => new Op("RenameSheet", [(o, n)])))),
+        (1, Gen.Elements(SheetPool).Select(n => new Op("DeleteSheet", [(n, "")]))),
+        (2, Gen.Elements(SheetPool.Append("Sheet1").ToArray()).SelectMany(sh => Gen.Elements("SInsRows", "SDelRows").SelectMany(k =>
+            Gen.Choose(1, 4).SelectMany(at => Gen.Choose(1, 2).Select(n =>
+                new Op(k, [(at.ToString(System.Globalization.CultureInfo.InvariantCulture), n.ToString(System.Globalization.CultureInfo.InvariantCulture))], sh)))))),
         (1, Gen.Constant(new Op("Save", []))));
 
     private static readonly Gen<Op[]> OpsGen = Gen.Choose(0, 30).SelectMany(n => Gen.ArrayOf(OpGen, n));
 
+    private static int Int(string s) => int.Parse(s, System.Globalization.CultureInfo.InvariantCulture);
+
+    private static bool HasSheet(Workbook wb, string name) => wb.SheetNames.Contains(name, StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Runs <paramref name="action"/>: it must throw exactly <typeparamref name="TEx"/> when <paramref name="fails"/>
+    /// (the expected failures: a missing sheet, a duplicate name, an out-of-range index), and must succeed otherwise.
+    /// </summary>
+    private static void Expect<TEx>(bool fails, Action action) where TEx : Exception
+    {
+        if (fails) Assert.Throws<TEx>(action);
+        else action();
+    }
+
     private static void Run(Workbook wb, Op op)
     {
+        string a0 = op.Edits.Length > 0 ? op.Edits[0].Address : "", i0 = op.Edits.Length > 0 ? op.Edits[0].Input : "";
         switch (op.Kind)
         {
             case "Batch": wb.ApplyBatch(op.Edits.Select(e => KeyValuePair.Create(e.Address, e.Input)).ToArray()); break;
-            case "Paste": wb.CopyPaste(op.Edits[0].Address, op.Edits[0].Input); break;
+            case "Paste": wb.CopyPaste(a0, i0); break;
             case "Set":
-                try { wb.SetCell(op.Edits[0].Address, op.Edits[0].Input); } catch (ArgumentException) { /* sheet not added yet */ }
+                // Unqualified always succeeds; qualified fails only when its sheet does not exist.
+                Expect<ArgumentException>(op.Sheet is not null && !HasSheet(wb, op.Sheet), () => wb.SetCell(a0, i0));
                 break;
-            case "Define": wb.DefineName(op.Edits[0].Address, op.Edits[0].Input); break;
-            case "InsRows": wb.InsertRows(int.Parse(op.Edits[0].Address, System.Globalization.CultureInfo.InvariantCulture), int.Parse(op.Edits[0].Input, System.Globalization.CultureInfo.InvariantCulture)); break;
-            case "DelRows": wb.DeleteRows(int.Parse(op.Edits[0].Address, System.Globalization.CultureInfo.InvariantCulture), int.Parse(op.Edits[0].Input, System.Globalization.CultureInfo.InvariantCulture)); break;
-            case "InsCols": wb.InsertColumns(int.Parse(op.Edits[0].Address, System.Globalization.CultureInfo.InvariantCulture), int.Parse(op.Edits[0].Input, System.Globalization.CultureInfo.InvariantCulture)); break;
-            case "DelCols": wb.DeleteColumns(int.Parse(op.Edits[0].Address, System.Globalization.CultureInfo.InvariantCulture), int.Parse(op.Edits[0].Input, System.Globalization.CultureInfo.InvariantCulture)); break;
+            case "Define": wb.DefineName(a0, i0); break;
+            case "InsRows": wb.InsertRows(Int(a0), Int(i0)); break;
+            case "DelRows": wb.DeleteRows(Int(a0), Int(i0)); break;
+            case "InsCols": wb.InsertColumns(Int(a0), Int(i0)); break;
+            case "DelCols": wb.DeleteColumns(Int(a0), Int(i0)); break;
+            case "SInsRows":
+                Expect<ArgumentException>(!HasSheet(wb, op.Sheet!), () => wb.InsertRows(op.Sheet!, Int(a0), Int(i0)));
+                break;
+            case "SDelRows":
+                Expect<ArgumentException>(!HasSheet(wb, op.Sheet!), () => wb.DeleteRows(op.Sheet!, Int(a0), Int(i0)));
+                break;
             case "Delete":
-                try { wb.DeleteName(op.Edits[0].Address); } catch (ArgumentException) { /* unknown name: no change */ }
+                Expect<ArgumentException>(!wb.GetNames().Any(n => n.Key.Equals(a0, StringComparison.OrdinalIgnoreCase)), () => wb.DeleteName(a0));
                 break;
             case "AddSheet":
-                // -1 means append; a duplicate name or out-of-range index changes nothing.
-                int at = int.Parse(op.Edits[0].Input, System.Globalization.CultureInfo.InvariantCulture);
-                try { wb.AddSheet(op.Edits[0].Address, at < 0 ? null : at); } catch (ArgumentException) { }
+                // -1 means append; a duplicate name or an index past the end changes nothing.
+                int at = Int(i0);
+                if (HasSheet(wb, a0)) Expect<ArgumentException>(true, () => wb.AddSheet(a0, at < 0 ? null : at));
+                else Expect<ArgumentOutOfRangeException>(at > wb.SheetNames.Count, () => wb.AddSheet(a0, at < 0 ? null : at));
                 break;
             case "MoveSheet":
-                try { wb.MoveSheet(op.Edits[0].Address, int.Parse(op.Edits[0].Input, System.Globalization.CultureInfo.InvariantCulture)); } catch (ArgumentException) { }
+                if (!HasSheet(wb, a0)) Expect<ArgumentException>(true, () => wb.MoveSheet(a0, Int(i0)));
+                else Expect<ArgumentOutOfRangeException>(Int(i0) >= wb.SheetNames.Count, () => wb.MoveSheet(a0, Int(i0)));
                 break;
             case "Activate":
-                try { wb.ActiveSheet = op.Edits[0].Address; } catch (ArgumentException) { }
+                Expect<ArgumentException>(!HasSheet(wb, a0), () => wb.ActiveSheet = a0);
+                break;
+            case "RenameSheet":
+                // Fails for a missing old sheet, or a new name held by a different sheet (a case-only rename is fine).
+                bool dup = HasSheet(wb, i0) && !i0.Equals(a0, StringComparison.OrdinalIgnoreCase);
+                Expect<ArgumentException>(!HasSheet(wb, a0) || dup, () => wb.RenameSheet(a0, i0));
+                break;
+            case "DeleteSheet":
+                Expect<ArgumentException>(!HasSheet(wb, a0), () => wb.DeleteSheet(a0));
                 break;
             default: wb.MarkSaved(); break;
         }
@@ -108,6 +149,7 @@ public class UndoProperties
         .Append(string.Join(";", wb.GetNames().Select(n => n.Key + "=" + n.Value)))
         .Append(string.Join("|", wb.SheetNames))
         .Append(string.Join("\u0001", wb.GetUsedAddresses().Select(a => a + "=" + wb.GetInput(a)))).ToArray();
+    private static string[] State(Workbook wb) => Inputs_(wb).Concat(Values(wb)).ToArray();
     private static KeyValuePair<string, string>[] UsedCells(Workbook wb) => wb.GetUsedAddresses().Select(a => KeyValuePair.Create(a, wb.GetInput(a))).ToArray();
     private static string[] Values(Workbook wb) => Pool.Select(a => "Sheet1!" + a).Concat(wb.GetUsedAddresses()).Select(a => a + "=" + wb.GetValue(a).ToCanonicalString()).ToArray();
 
@@ -135,12 +177,15 @@ public class UndoProperties
             var wb = new Workbook();
             int steps = 0, saved = 0;
             bool dirtyOk = !wb.IsDirty;
+            // State (inputs, names, layout, values) after each recorded step; snaps[k] = after k steps. Every single
+            // undo and redo must land exactly on the neighbouring snapshot (CR1.3: rename/delete restore verbatim).
+            var snaps = new List<string[]> { State(wb) };
             foreach (var op in ops)
             {
                 var before = Inputs_(wb);
                 Run(wb, op);
                 if (op.Kind == "Save") saved = steps;
-                else if (!before.SequenceEqual(Inputs_(wb))) steps++;
+                else if (!before.SequenceEqual(Inputs_(wb))) { steps++; snaps.Add(State(wb)); }
                 dirtyOk &= wb.IsDirty == (steps != saved) && wb.CanUndo == (steps > 0);
             }
             var postInputs = Inputs_(wb);
@@ -150,19 +195,30 @@ public class UndoProperties
             var postSheets = wb.SheetNames.ToArray();
 
             int undone = 0;
-            while (wb.Undo()) { undone++; dirtyOk &= wb.IsDirty == (steps - undone != saved); }
+            bool stepwise = true;
+            while (wb.Undo())
+            {
+                undone++;
+                dirtyOk &= wb.IsDirty == (steps - undone != saved);
+                stepwise &= undone <= steps && State(wb).SequenceEqual(snaps[steps - undone]);
+            }
             bool initial = Inputs_(wb).SequenceEqual(Inputs_(new Workbook())) && wb.GetNames().Count == 0 && wb.GetUsedAddresses().Count == 0
                            && wb.SheetNames.SequenceEqual(["Sheet1"]) && wb.ActiveSheet == "Sheet1"
                            && Pool.All(a => wb.GetValue(a).Kind == ValueKind.Blank)
                            && wb.IsDirty == (saved != 0) && !wb.CanUndo && undone == steps;
 
             int redone = 0;
-            while (wb.Redo()) { redone++; dirtyOk &= wb.IsDirty == (redone != saved); }
+            while (wb.Redo())
+            {
+                redone++;
+                dirtyOk &= wb.IsDirty == (redone != saved);
+                stepwise &= redone <= steps && State(wb).SequenceEqual(snaps[redone]);
+            }
             // Incremental recalc after redo agrees with a full recalc of the same inputs.
             var fresh = Fresh(postSheets, postCells, postNames);
             bool replayed = Inputs_(wb).SequenceEqual(postInputs) && Values(wb).SequenceEqual(postValues)
                             && Values(fresh).SequenceEqual(postValues) && redone == undone && !wb.CanRedo;
 
-            return (initial && replayed && dirtyOk).Label($"initial={initial} replayed={replayed} dirtyOk={dirtyOk} steps={steps} saved={saved} undone={undone} redone={redone}");
+            return (initial && replayed && dirtyOk && stepwise).Label($"initial={initial} replayed={replayed} dirtyOk={dirtyOk} stepwise={stepwise} steps={steps} saved={saved} undone={undone} redone={redone}");
         });
 }
