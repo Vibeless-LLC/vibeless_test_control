@@ -175,13 +175,21 @@ public static class CliApp
                 // An existing workbook gains a new sheet (CR1.7); a duplicate name is a usage error and nothing is written.
                 var wb = LoadFile(full);
                 if (wb.SheetNames.Contains(sheet, StringComparer.OrdinalIgnoreCase)) return Fail(stderr, Usage, "duplicate sheet name: " + sheet);
-                using (var ms = new MemoryStream(bytes, writable: false)) CsvFile.ImportInto(wb, sheet, ms, new CsvOptions(delimiter));
+                // A full workbook (255 sheets) throws InvalidOperationException before anything changes: exit 1, file untouched.
+                try
+                {
+                    using var ms = new MemoryStream(bytes, writable: false);
+                    CsvFile.ImportInto(wb, sheet, ms, new CsvOptions(delimiter));
+                }
+                catch (InvalidOperationException ex) { return Fail(stderr, Usage, ex.Message); }
                 SaveFile(wb, full);
             }
             else
             {
                 var wb = CsvFile.Import(bytes, delimiter);
-                wb.RenameSheet(wb.ActiveSheet, sheet);
+                // RenameSheet throws InvalidOperationException if a rewritten formula would exceed the input limit.
+                try { wb.RenameSheet(wb.ActiveSheet, sheet); }
+                catch (InvalidOperationException ex) { return Fail(stderr, Usage, ex.Message); }
                 wb.MarkSaved();
                 SaveFile(wb, full);
             }

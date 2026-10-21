@@ -93,6 +93,21 @@ public sealed class CliSheetTests : IDisposable
     }
 
     [Fact]
+    public void Cli_ImportCsv_Sheet_MaxSheets_Exit1_FileUnchanged()
+    {
+        var wb = new Workbook();
+        for (int i = 2; i <= Gridline.Core.Addressing.SheetNames.MaxSheets; i++) wb.AddSheet("S_" + i);
+        var o = P("full.gridline");
+        GridlineFile.SaveToPath(wb, o);
+        File.WriteAllText(P("a.csv"), "1\n");
+        var before = File.ReadAllBytes(o);
+        var r = Run("import-csv", P("a.csv"), o, "--sheet", "New");
+        Assert.Equal(1, r.code);
+        Assert.StartsWith("error: ", r.stderr);
+        Assert.Equal(before, File.ReadAllBytes(o));
+    }
+
+    [Fact]
     public void Cli_ImportCsv_InvalidSheet_Exit1_BeforeFiles() =>
         Assert.Equal(1, Run("import-csv", P("missing.csv"), P("o.gridline"), "--sheet", "a/b").code);
 
