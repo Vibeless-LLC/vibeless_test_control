@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using Gridline.Core;
 using Gridline.Core.Addressing;
@@ -75,17 +76,15 @@ internal sealed class ScriptRunner
                 break;
             case "PASTE":
             {
-                var parts = rest.Split(' ');
-                if (parts.Length != 2) { Err("PASTE requires <srcRange> <dstAddr>"); break; }
+                if (!ScriptArgs.TrySplit(rest, out var parts) || parts.Count != 2) { Err("PASTE requires <srcRange> <dstAddr>"); break; }
                 _wb.CopyPaste(parts[0], parts[1]);
                 break;
             }
             case "SET":
             case "SETX":
             {
-                int sp2 = rest.IndexOf(' ');
-                string addrText = sp2 < 0 ? rest : rest[..sp2];
-                string input = sp2 < 0 ? "" : rest[(sp2 + 1)..];
+                // The address may be a quoted qualified address ('My Data'!A1); the input follows verbatim (CR1.7).
+                var (addrText, input) = ScriptArgs.SplitFirst(rest);
                 if (cmd == "SETX") input = Escaping.Unescape(input);
                 // Inside a batch the address text is buffered as given (a bare SET buffers ""), so END's single
                 // ApplyBatch validates every address and length and applies nothing on failure (§9.3, §10.3).
@@ -95,11 +94,11 @@ internal sealed class ScriptRunner
                 break;
             }
             case "GET":
-                if (TryAddr(FirstToken(rest), out var g))
+                if (TryAddr(ScriptArgs.SplitFirst(rest).token, out var g))
                     _out.Write(g + "\t" + _wb.GetValue(g).ToCanonicalString() + "\n");
                 break;
             case "INPUT":
-                if (TryAddr(FirstToken(rest), out var i))
+                if (TryAddr(ScriptArgs.SplitFirst(rest).token, out var i))
                     _out.Write(i + "\t" + Escaping.Escape(_wb.GetInput(i)) + "\n");
                 break;
             case "DUMP":
@@ -124,8 +123,10 @@ internal sealed class ScriptRunner
                 break;
             case "NAME":
             {
-                var parts = rest.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-                if (parts.Length != 2) { Err("usage: NAME <name> <refersTo>"); break; }
+                // Quote-aware so a refersTo like 'My Data'!$A$1 is one argument (CR1.7); empty tokens are skipped as before.
+                if (!ScriptArgs.TrySplit(rest, out var raw)) { Err("usage: NAME <name> <refersTo>"); break; }
+                var parts = raw.FindAll(t => t.Length > 0);
+                if (parts.Count != 2) { Err("usage: NAME <name> <refersTo>"); break; }
                 _wb.DefineName(parts[0], parts[1]);
                 break;
             }
@@ -145,24 +146,70 @@ internal sealed class ScriptRunner
             }
             case "INSERTROWS": case "DELETEROWS": case "INSERTCOLS": case "DELETECOLS":
             {
-                // <row> <n> or <letters> <n>; exactly two single-space-separated arguments (§10.3).
-                var parts = rest.Split(' ');
+                // [<sheet>!]<row> <n> or [<sheet>!]<letters> <n>; two single-space-separated arguments (§10.3, CR1.7).
                 bool cols = cmd is "INSERTCOLS" or "DELETECOLS";
                 int at = 0;
-                if (parts.Length != 2
-                    || !(cols ? ColumnName.TryParse(parts[0], out at) && at <= CellAddress.MaxColumns : TryPositiveInt(parts[0], out at))
+                string? sheet = null;
+                if (!ScriptArgs.TrySplit(rest, out var parts) || parts.Count != 2
+                    || !QualifiedAddress.TryParseColumnOrRow(parts[0], cols, out sheet, out at)
+                    || (cols && at > CellAddress.MaxColumns)
                     || !TryPositiveInt(parts[1], out int n))
                 {
-                    Err("usage: " + cmd + (cols ? " <col> <n>" : " <row> <n>"));
+                    Err("usage: " + cmd + (cols ? " [<sheet>!]<col> <n>" : " [<sheet>!]<row> <n>"));
                     break;
                 }
+                string target = sheet ?? _wb.ActiveSheet;
                 switch (cmd)
                 {
-                    case "INSERTROWS": _wb.InsertRows(at, n); break;
-                    case "DELETEROWS": _wb.DeleteRows(at, n); break;
-                    case "INSERTCOLS": _wb.InsertColumns(at, n); break;
-                    default: _wb.DeleteColumns(at, n); break;
+                    case "INSERTROWS": _wb.InsertRows(target, at, n); break;
+                    case "DELETEROWS": _wb.DeleteRows(target, at, n); break;
+                    case "INSERTCOLS": _wb.InsertColumns(target, at, n); break;
+                    default: _wb.DeleteColumns(target, at, n); break;
                 }
+                break;
+            }
+            case "ADDSHEET":
+            {
+                if (!SheetArgs(rest, 1, 1, 2, out var a) || (a.Count == 2 && !TryNonNegativeInt(a[1], out _)))
+                {
+                    Err("usage: ADDSHEET <name> [index]");
+                    break;
+                }
+                int? index = a.Count == 2 ? int.Parse(a[1], CultureInfo.InvariantCulture) : null;
+                _wb.AddSheet(a[0], index);
+                break;
+            }
+            case "RENAMESHEET":
+                if (!SheetArgs(rest, 2, 2, 2, out var rn)) { Err("usage: RENAMESHEET <old> <new>"); break; }
+                _wb.RenameSheet(rn[0], rn[1]);
+                break;
+            case "DELETESHEET":
+                if (!SheetArgs(rest, 1, 1, 1, out var dn)) { Err("usage: DELETESHEET <name>"); break; }
+                _wb.DeleteSheet(dn[0]);
+                break;
+            case "MOVESHEET":
+            {
+                if (!SheetArgs(rest, 1, 2, 2, out var mv) || !TryNonNegativeInt(mv[1], out int to))
+                {
+                    Err("usage: MOVESHEET <name> <index>");
+                    break;
+                }
+                _wb.MoveSheet(mv[0], to);
+                break;
+            }
+            case "ACTIVATE":
+                if (!SheetArgs(rest, 1, 1, 1, out var an)) { Err("usage: ACTIVATE <name>"); break; }
+                _wb.ActiveSheet = an[0];
+                break;
+            case "SHEETS":
+            {
+                if (sp >= 0) { Err("usage: SHEETS"); break; }
+                var sb = new StringBuilder();
+                var names = _wb.SheetNames;
+                for (int k = 0; k < names.Count; k++)
+                    sb.Append("SHEET\t").Append(k.ToString(CultureInfo.InvariantCulture)).Append('\t').Append(Escaping.Escape(names[k])).Append('\n');
+                sb.Append("ACTIVE\t").Append(Escaping.Escape(_wb.ActiveSheet)).Append('\n');
+                _out.Write(sb.ToString());
                 break;
             }
             default:
@@ -187,16 +234,33 @@ internal sealed class ScriptRunner
         return v >= 1;
     }
 
-    private static string FirstToken(string s)
+    /// <summary>ASCII digits only, value 0..int.MaxValue (a sheet index).</summary>
+    private static bool TryNonNegativeInt(string s, out int value)
     {
-        int sp = s.IndexOf(' ');
-        return sp < 0 ? s : s[..sp];
+        value = 0;
+        return s == "0" || TryPositiveInt(s, out value);
     }
 
+    /// <summary>
+    /// Splits <paramref name="rest"/> into <paramref name="min"/>..<paramref name="max"/> arguments, the first
+    /// <paramref name="names"/> of which must be sheet names per CR1.2 quoting (<see cref="SheetNames.TryParseName"/>);
+    /// those are replaced by the unquoted names.
+    /// </summary>
+    private static bool SheetArgs(string rest, int names, int min, int max, out List<string> args)
+    {
+        if (!ScriptArgs.TrySplit(rest, out args) || args.Count < min || args.Count > max) return false;
+        for (int k = 0; k < names; k++)
+        {
+            if (!SheetNames.TryParseName(args[k], out var n)) return false;
+            args[k] = n;
+        }
+        return true;
+    }
+
+    /// <summary>Canonical echo of a cell address (CR1.7); a syntax error prints ERR, an unknown sheet throws (→ ERR).</summary>
     private bool TryAddr(string text, out string canonical)
     {
-        if (CellAddress.TryParse(text, out var a)) { canonical = a.ToString(); return true; }
-        canonical = "";
+        if (ScriptArgs.TryCanonical(_wb, text, out canonical)) return true;
         Err("invalid address: " + text);
         return false;
     }

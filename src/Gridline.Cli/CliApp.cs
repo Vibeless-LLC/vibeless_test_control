@@ -65,18 +65,34 @@ public static class CliApp
         var addrs = new List<string>();
         if (!all)
         {
+            // Syntax is checked before the file is loaded (exit 5); sheet names are resolved after (CR1.7).
             for (int i = 2; i < args.Length; i++)
             {
-                if (!CellAddress.TryParse(args[i], out var a)) return Fail(stderr, BadAddress, "invalid address: " + args[i]);
-                addrs.Add(a.ToString());
+                if (!QualifiedAddress.TryParseCell(args[i], out _, out _)) return Fail(stderr, BadAddress, "invalid address: " + args[i]);
+                addrs.Add(args[i]);
             }
         }
         var wb = LoadFile(file);
         if (all) addrs.AddRange(wb.GetUsedAddresses());
+        else
+        {
+            for (int i = 0; i < addrs.Count; i++)
+            {
+                if (!TryCanonical(wb, addrs[i], out var c)) return Fail(stderr, BadAddress, "invalid address: " + addrs[i]);
+                addrs[i] = c;
+            }
+        }
         var sb = new System.Text.StringBuilder();
         foreach (var a in addrs) sb.Append(a).Append('\t').Append(wb.GetValue(a).ToCanonicalString()).Append('\n');
         stdout.Write(sb.ToString());
         return 0;
+    }
+
+    /// <summary>Canonical echo after load (CR1.7): false for a syntax error or an unknown sheet (both exit 5).</summary>
+    private static bool TryCanonical(Workbook wb, string text, out string canonical)
+    {
+        try { return ScriptArgs.TryCanonical(wb, text, out canonical); }
+        catch (ArgumentException) { canonical = ""; return false; }
     }
 
     private static int Set(string[] args, TextWriter stderr)
@@ -94,10 +110,11 @@ public static class CliApp
         }
         if (pos.Count != 3) return Fail(stderr, Usage, "usage: gridline set <file> <addr> <input> [--out <path>]");
         // Arguments are validated before the file is touched, like eval: invalid address 5, input too long 1.
-        if (!CellAddress.TryParse(pos[1], out var addr)) return Fail(stderr, BadAddress, "invalid address: " + pos[1]);
+        if (!QualifiedAddress.TryParseCell(pos[1], out _, out _)) return Fail(stderr, BadAddress, "invalid address: " + pos[1]);
         if (pos[2].Length > Workbook.MaxInputLength) return Fail(stderr, Usage, "input exceeds " + Workbook.MaxInputLength + " characters");
         var wb = LoadFile(pos[0]);
-        wb.SetCell(addr.ToString(), pos[2]);
+        if (!TryCanonical(wb, pos[1], out var addr)) return Fail(stderr, BadAddress, "invalid address: " + pos[1]);
+        wb.SetCell(addr, pos[2]);
         SaveFile(wb, outPath ?? pos[0]);
         return 0;
     }
@@ -119,10 +136,11 @@ public static class CliApp
     private static int Csv(string[] args, TextWriter stderr, bool import)
     {
         string cmd = import ? "import-csv <csv>" : "export-csv <file>";
-        string usage = "usage: gridline " + cmd + " <out> [--delimiter c]";
+        string usage = "usage: gridline " + cmd + " <out> [--delimiter c] [--sheet <name>]";
         var pos = new List<string>();
         char delimiter = ',';
         bool seenDelim = false;
+        string? sheet = null;
         for (int i = 1; i < args.Length; i++)
         {
             if (args[i] == "--delimiter")
@@ -132,6 +150,13 @@ public static class CliApp
                 if (d.Length != 1 || d[0] is '"' or '\r' or '\n') return Fail(stderr, Usage, "invalid delimiter");
                 delimiter = d[0];
                 seenDelim = true;
+            }
+            else if (args[i] == "--sheet")
+            {
+                // The value is the plain sheet name (one argv entry, no CR1.2 quoting); it must be a valid name (CR1.7).
+                if (i + 1 >= args.Length || sheet != null) return Fail(stderr, Usage, usage);
+                sheet = args[++i];
+                if (!SheetNames.IsValid(sheet)) return Fail(stderr, Usage, "invalid sheet name");
             }
             else pos.Add(args[i]);
         }
@@ -144,9 +169,29 @@ public static class CliApp
             byte[] bytes;
             try { bytes = File.ReadAllBytes(pos[0]); }
             catch (Exception ex) when (ex is ArgumentException or NotSupportedException) { throw new InvalidPathException(ex); }
-            SaveFile(CsvFile.Import(bytes, delimiter), full);
+            if (sheet == null) SaveFile(CsvFile.Import(bytes, delimiter), full);
+            else if (File.Exists(full))
+            {
+                // An existing workbook gains a new sheet (CR1.7); a duplicate name is a usage error and nothing is written.
+                var wb = LoadFile(full);
+                if (wb.SheetNames.Contains(sheet, StringComparer.OrdinalIgnoreCase)) return Fail(stderr, Usage, "duplicate sheet name: " + sheet);
+                using (var ms = new MemoryStream(bytes, writable: false)) CsvFile.ImportInto(wb, sheet, ms, new CsvOptions(delimiter));
+                SaveFile(wb, full);
+            }
+            else
+            {
+                var wb = CsvFile.Import(bytes, delimiter);
+                wb.RenameSheet(wb.ActiveSheet, sheet);
+                wb.MarkSaved();
+                SaveFile(wb, full);
+            }
         }
-        else CsvFile.ExportToPath(LoadFile(pos[0]), full, delimiter);
+        else
+        {
+            var wb = LoadFile(pos[0]);
+            if (sheet != null && !wb.SheetNames.Contains(sheet, StringComparer.OrdinalIgnoreCase)) return Fail(stderr, Usage, "unknown sheet: " + sheet);
+            CsvFile.ExportToPath(wb, full, delimiter, sheet);
+        }
         return 0;
     }
 }
