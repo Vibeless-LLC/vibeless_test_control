@@ -15,18 +15,18 @@ public class GridlineFileTests
         return wb;
     }
 
-    [Fact] public void Save_Names_ExactBytes() { var wb = new Workbook(); wb.DefineName("Total", "$A$1:$A$10"); wb.DefineName("Rate", "$B$1"); Assert.Equal("{\n  \"format\": \"gridline\",\n  \"version\": 1,\n  \"names\": {\n    \"Rate\": \"$B$1\",\n    \"Total\": \"$A$1:$A$10\"\n  },\n  \"cells\": []\n}\n", GridlineFile.Serialize(wb)); }
+    [Fact] public void Save_Names_ExactBytes() { var wb = new Workbook(); wb.DefineName("Total", "$A$1:$A$10"); wb.DefineName("Rate", "$B$1"); Assert.Equal("{\n  \"format\": \"gridline\",\n  \"version\": 2,\n  \"activeSheet\": \"Sheet1\",\n  \"names\": {\n    \"Rate\": \"Sheet1!$B$1\",\n    \"Total\": \"Sheet1!$A$1:$A$10\"\n  },\n  \"sheets\": [\n    {\n      \"name\": \"Sheet1\",\n      \"cells\": []\n    }\n  ]\n}\n", GridlineFile.Serialize(wb)); }
     [Fact] public void Load_InvalidName_Throws() => Assert.Throws<GridlineFormatException>(() => GridlineFile.Load("{\"format\":\"gridline\",\"version\":1,\"names\":{\"A1\":\"$A$1\"},\"cells\":[]}"u8));
     [Fact] public void Load_RelativeRefersTo_Throws() => Assert.Throws<GridlineFormatException>(() => GridlineFile.Load("{\"format\":\"gridline\",\"version\":1,\"names\":{\"R\":\"A1\"},\"cells\":[]}"u8));
     [Fact] public void Names_NotObject_Throws() => Assert.Throws<GridlineFormatException>(() => GridlineFile.Load("{\"format\":\"gridline\",\"version\":1,\"names\":[],\"cells\":[]}"u8));
     [Fact] public void Names_RefTargetSurvivesRoundTrip() { var wb = new Workbook(); wb.DefineName("R", "$A$2"); wb.DeleteRows(2, 1); var bytes = GridlineFile.SerializeToUtf8(wb); var back = GridlineFile.Load(bytes); Assert.Equal("#REF!", back.GetNames()[0].Value); Assert.Equal(bytes, GridlineFile.SerializeToUtf8(back)); }
     [Fact] public void Names_OneByOneRangeSurvivesRoundTrip() { var wb = new Workbook(); wb.DefineName("R", "$A$1:$A$1"); var bytes = GridlineFile.SerializeToUtf8(wb); var back = GridlineFile.Load(bytes); Assert.Equal("Sheet1!$A$1:$A$1", back.GetNames()[0].Value); Assert.Equal(bytes, GridlineFile.SerializeToUtf8(back)); }
-    [Fact] public void Save_Empty_ExactBytes() => Assert.Equal("{\n  \"format\": \"gridline\",\n  \"version\": 1,\n  \"names\": {},\n  \"cells\": []\n}\n", GridlineFile.Serialize(new Workbook()));
+    [Fact] public void Save_Empty_ExactBytes() => Assert.Equal("{\n  \"format\": \"gridline\",\n  \"version\": 2,\n  \"activeSheet\": \"Sheet1\",\n  \"names\": {},\n  \"sheets\": [\n    {\n      \"name\": \"Sheet1\",\n      \"cells\": []\n    }\n  ]\n}\n", GridlineFile.Serialize(new Workbook()));
 
     [Fact]
     public void Save_Cells_ExactBytes()
     {
-        Assert.Equal("{\n  \"format\": \"gridline\",\n  \"version\": 1,\n  \"names\": {},\n  \"cells\": [\n    [\"A1\", \"=SUM(B1:B3)\"],\n    [\"B1\", \"5\"],\n    [\"A2\", \"hello \\\"world\\\"\"]\n  ]\n}\n", GridlineFile.Serialize(Sample()));
+        Assert.Equal("{\n  \"format\": \"gridline\",\n  \"version\": 2,\n  \"activeSheet\": \"Sheet1\",\n  \"names\": {},\n  \"sheets\": [\n    {\n      \"name\": \"Sheet1\",\n      \"cells\": [\n        [\"A1\", \"=SUM(B1:B3)\"],\n        [\"B1\", \"5\"],\n        [\"A2\", \"hello \\\"world\\\"\"]\n      ]\n    }\n  ]\n}\n", GridlineFile.Serialize(Sample()));
     }
 
     [Fact]
@@ -62,19 +62,25 @@ public class GridlineFileTests
         Assert.Equal(bytes, GridlineFile.SerializeToUtf8(GridlineFile.Load(bytes)));
     }
 
-    /// <summary>The §8.1 layout example, verbatim (LF, trailing newline).</summary>
+    /// <summary>The §8.1 layout example (v2, CR1.5), verbatim (LF, trailing newline).</summary>
     private const string SpecExample = """
         {
           "format": "gridline",
-          "version": 1,
+          "version": 2,
+          "activeSheet": "Sheet1",
           "names": {
-            "Rate": "$B$1",
-            "Total": "$A$1:$A$10"
+            "Rate": "Sheet1!$B$1",
+            "Total": "Sheet1!$A$1:$A$10"
           },
-          "cells": [
-            ["A1", "=SUM(B1:B3)*Rate"],
-            ["B1", "5"],
-            ["A2", "hello \"world\""]
+          "sheets": [
+            {
+              "name": "Sheet1",
+              "cells": [
+                ["A1", "=SUM(B1:B3)*Rate"],
+                ["B1", "5"],
+                ["A2", "hello \"world\""]
+              ]
+            }
           ]
         }
 
@@ -106,7 +112,7 @@ public class GridlineFileTests
     {
         var wb = GridlineFile.Load("{\"format\":\"gridline\",\"version\":1,\"names\":{\"total\":\"$a$10:$a$1\",\"Gone\":\"#REF!\",\"rate\":\"$b$1\"},\"cells\":[]}"u8);
         Assert.Equal(
-            "{\n  \"format\": \"gridline\",\n  \"version\": 1,\n  \"names\": {\n    \"Gone\": \"#REF!\",\n    \"rate\": \"$B$1\",\n    \"total\": \"$A$1:$A$10\"\n  },\n  \"cells\": []\n}\n",
+            "{\n  \"format\": \"gridline\",\n  \"version\": 2,\n  \"activeSheet\": \"Sheet1\",\n  \"names\": {\n    \"Gone\": \"#REF!\",\n    \"rate\": \"Sheet1!$B$1\",\n    \"total\": \"Sheet1!$A$1:$A$10\"\n  },\n  \"sheets\": [\n    {\n      \"name\": \"Sheet1\",\n      \"cells\": []\n    }\n  ]\n}\n",
             GridlineFile.Serialize(wb));
     }
 
@@ -176,12 +182,12 @@ public class GridlineFileTests
 
     [Fact]
     public void Load_FutureVersion_Message() =>
-        Assert.Contains("unsupported version", Assert.Throws<GridlineFormatException>(() => GridlineFile.Load("{\"format\":\"gridline\",\"version\":2,\"cells\":[]}"u8)).Message);
+        Assert.Contains("unsupported version", Assert.Throws<GridlineFormatException>(() => GridlineFile.Load("{\"format\":\"gridline\",\"version\":3,\"cells\":[]}"u8)).Message);
 
     [Theory]
     [InlineData("99999999999999999999")]
     [InlineData("9223372036854775808")]
-    [InlineData("2")]
+    [InlineData("3")]
     public void Load_HugeOrFutureIntegerVersion_Unsupported(string v) =>
         Assert.Contains("unsupported version", Assert.Throws<GridlineFormatException>(() =>
             GridlineFile.Load(Encoding.UTF8.GetBytes("{\"format\":\"gridline\",\"version\":" + v + ",\"cells\":[]}"))).Message);

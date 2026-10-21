@@ -154,18 +154,19 @@ public class UndoProperties
     private static string[] Values(Workbook wb) => Pool.Select(a => "Sheet1!" + a).Concat(wb.GetUsedAddresses()).Select(a => a + "=" + wb.GetValue(a).ToCanonicalString()).ToArray();
 
     /// <summary>
-    /// A workbook with the given layout, names and cells, recalculated in one go: <see cref="Workbook.FromSnapshot"/>
-    /// for one sheet; with several, sheets are added and ordered first, then names, then all cells in one batch.
+    /// A workbook with the given layout, names and cells built by the multi-sheet <see cref="Workbook.FromSnapshot"/>,
+    /// i.e. a real full recalc (CR1.5): the oracle for "incremental equals full recalc".
     /// </summary>
     private static Workbook Fresh(string[] sheets, KeyValuePair<string, string>[] cells, IReadOnlyList<KeyValuePair<string, string>> names)
     {
-        if (sheets.Length == 1) return Workbook.FromSnapshot(cells, names);
-        var wb = new Workbook();
-        foreach (var n in sheets) if (n != "Sheet1") wb.AddSheet(n);
-        for (int i = 0; i < sheets.Length; i++) wb.MoveSheet(sheets[i], i);
-        wb.ReplaceNames(names);
-        wb.ApplyBatch(cells);
-        return wb;
+        var bySheet = sheets.ToDictionary(n => n, _ => new List<KeyValuePair<string, string>>(), StringComparer.OrdinalIgnoreCase);
+        foreach (var (address, input) in cells)
+        {
+            Assert.True(Gridline.Core.Addressing.QualifiedAddress.TryParseCell(address, out string? sheet, out var cell));
+            bySheet[sheet ?? sheets[0]].Add(KeyValuePair.Create(cell.ToString(), input));
+        }
+        var snaps = sheets.Select(n => new SheetSnapshot(n, bySheet[n])).ToArray();
+        return Workbook.FromSnapshot(snaps, names, sheets[0]);
     }
 
     [Property(MaxTest = 200)]

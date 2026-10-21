@@ -4,27 +4,19 @@ using Gridline.Core;
 
 namespace Gridline.IO;
 
-/// <summary>The .gridline JSON file format, version 1 (§8.1, §8.2, §8.4).</summary>
+/// <summary>The .gridline JSON file format, version 2, reading 1 and 2 (§8.1, §8.2, §8.4, CR1.5).</summary>
 public static class GridlineFile
 {
-    private const long CurrentVersion = 1;
+    private const long CurrentVersion = 2;
 
-    /// <summary>
-    /// Version 1 stores unqualified <c>refersTo</c> (§8.1): the sheet prefix that <see cref="Workbook.GetNames"/>
-    /// returns since CR1.4 is dropped. Interim until the v2 writer (CR1.5); a v1 file has one sheet.
-    /// </summary>
-    private static string V1RefersTo(string refersTo)
-    {
-        int bang = refersTo.LastIndexOf('!');
-        return bang < 0 || refersTo == "#REF!" ? refersTo : refersTo[(bang + 1)..];
-    }
-
-    /// <summary>Canonical text: LF line endings, trailing newline.</summary>
+    /// <summary>Canonical text: LF line endings, trailing newline. Always version 2 (CR1.5).</summary>
     public static string Serialize(Workbook wb)
     {
         ArgumentNullException.ThrowIfNull(wb);
         var sb = new StringBuilder();
-        sb.Append("{\n  \"format\": \"gridline\",\n  \"version\": 1,\n");
+        sb.Append("{\n  \"format\": \"gridline\",\n  \"version\": 2,\n  \"activeSheet\": ");
+        JsonEscaper.Append(sb, wb.ActiveSheet);
+        sb.Append(",\n");
 
         var names = wb.GetNames().OrderBy(n => n.Key, StringComparer.OrdinalIgnoreCase).ToList();
         if (names.Count == 0) sb.Append("  \"names\": {},\n");
@@ -36,28 +28,38 @@ public static class GridlineFile
                 sb.Append("    ");
                 JsonEscaper.Append(sb, names[i].Key);
                 sb.Append(": ");
-                JsonEscaper.Append(sb, V1RefersTo(names[i].Value));
+                JsonEscaper.Append(sb, names[i].Value);
                 sb.Append(i + 1 < names.Count ? ",\n" : "\n");
             }
             sb.Append("  },\n");
         }
 
-        var addrs = wb.GetUsedAddresses();
-        if (addrs.Count == 0) sb.Append("  \"cells\": []\n");
-        else
+        sb.Append("  \"sheets\": [\n");
+        var sheets = wb.SheetNames;
+        for (int s = 0; s < sheets.Count; s++)
         {
-            sb.Append("  \"cells\": [\n");
-            for (int i = 0; i < addrs.Count; i++)
+            sb.Append("    {\n      \"name\": ");
+            JsonEscaper.Append(sb, sheets[s]);
+            sb.Append(",\n");
+            var addrs = wb.GetUsedAddresses(sheets[s]);
+            if (addrs.Count == 0) sb.Append("      \"cells\": []\n");
+            else
             {
-                sb.Append("    [");
-                JsonEscaper.Append(sb, addrs[i]);
-                sb.Append(", ");
-                JsonEscaper.Append(sb, wb.GetInput(addrs[i]));
-                sb.Append(i + 1 < addrs.Count ? "],\n" : "]\n");
+                string prefix = Gridline.Core.Addressing.SheetNames.Format(sheets[s]) + "!";
+                sb.Append("      \"cells\": [\n");
+                for (int i = 0; i < addrs.Count; i++)
+                {
+                    sb.Append("        [");
+                    JsonEscaper.Append(sb, addrs[i]);
+                    sb.Append(", ");
+                    JsonEscaper.Append(sb, wb.GetInput(prefix + addrs[i]));
+                    sb.Append(i + 1 < addrs.Count ? "],\n" : "]\n");
+                }
+                sb.Append("      ]\n");
             }
-            sb.Append("  ]\n");
+            sb.Append(s + 1 < sheets.Count ? "    },\n" : "    }\n");
         }
-        sb.Append("}\n");
+        sb.Append("  ]\n}\n");
         return sb.ToString();
     }
 
@@ -192,7 +194,7 @@ public static class GridlineFile
             throw new GridlineFormatException("unsupported version " + raw);
         }
         if (version > CurrentVersion) throw new GridlineFormatException("unsupported version " + version);
-        if (version < CurrentVersion) throw new GridlineFormatException("invalid version " + version);
+        if (version < 1) throw new GridlineFormatException("invalid version " + version);
 
         var names = new List<KeyValuePair<string, string>>();
         if (root.TryGetProperty("names", out var namesEl))
@@ -205,6 +207,33 @@ public static class GridlineFile
             }
         }
 
+        if (version == 1)
+        {
+            // Migration (CR1.5): one sheet Sheet1; unqualified refersTo are qualified with it by the active sheet.
+            var cells = ReadCells(root);
+            var migrated = new List<KeyValuePair<string, string>>(names.Count);
+            foreach (var (k, v) in names) migrated.Add(new(k, v == "#REF!" ? v : "Sheet1!" + v));
+            return Workbook.FromSnapshot(cells, migrated);
+        }
+
+        if (!root.TryGetProperty("activeSheet", out var activeEl) || activeEl.ValueKind != JsonValueKind.String)
+            throw new GridlineFormatException("activeSheet missing or not a string");
+        if (!root.TryGetProperty("sheets", out var sheetsEl) || sheetsEl.ValueKind != JsonValueKind.Array || sheetsEl.GetArrayLength() == 0)
+            throw new GridlineFormatException("sheets must be a non-empty array");
+        var sheets = new List<SheetSnapshot>();
+        foreach (var se in sheetsEl.EnumerateArray())
+        {
+            if (se.ValueKind != JsonValueKind.Object) throw new GridlineFormatException("sheet must be an object");
+            if (!se.TryGetProperty("name", out var nameEl) || nameEl.ValueKind != JsonValueKind.String)
+                throw new GridlineFormatException("sheet name missing or not a string");
+            if (!se.TryGetProperty("cells", out _)) throw new GridlineFormatException("sheet cells missing");
+            sheets.Add(new SheetSnapshot(Str(nameEl), ReadCells(se)));
+        }
+        return Workbook.FromSnapshot(sheets, names, Str(activeEl));
+    }
+
+    private static List<KeyValuePair<string, string>> ReadCells(JsonElement root)
+    {
         var cells = new List<KeyValuePair<string, string>>();
         if (root.TryGetProperty("cells", out var cellsEl))
         {
@@ -220,6 +249,6 @@ public static class GridlineFile
             }
         }
 
-        return Workbook.FromSnapshot(cells, names);
+        return cells;
     }
 }

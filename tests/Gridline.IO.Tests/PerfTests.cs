@@ -18,13 +18,13 @@ public class PerfTests(ITestOutputHelper output)
     /// <summary>Cells as .gridline JSON bytes, written by hand. Inputs must need no JSON escaping.</summary>
     private static byte[] Json(IReadOnlyList<KeyValuePair<string, string>> cells)
     {
-        var sb = new StringBuilder("{\n  \"format\": \"gridline\",\n  \"version\": 1,\n  \"names\": {},\n  \"cells\": [\n");
+        var sb = new StringBuilder("{\n  \"format\": \"gridline\",\n  \"version\": 2,\n  \"activeSheet\": \"Sheet1\",\n  \"names\": {},\n  \"sheets\": [\n    {\n      \"name\": \"Sheet1\",\n      \"cells\": [\n");
         for (int i = 0; i < cells.Count; i++)
         {
-            sb.Append("    [\"").Append(cells[i].Key).Append("\", \"").Append(cells[i].Value).Append("\"]");
+            sb.Append("        [\"").Append(cells[i].Key).Append("\", \"").Append(cells[i].Value).Append("\"]");
             sb.Append(i + 1 < cells.Count ? ",\n" : "\n");
         }
-        sb.Append("  ]\n}\n");
+        sb.Append("      ]\n    }\n  ]\n}\n");
         return Encoding.UTF8.GetBytes(sb.ToString());
     }
 

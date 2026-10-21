@@ -69,18 +69,8 @@ public sealed partial class Workbook
     {
         ArgumentNullException.ThrowIfNull(cells);
         ArgumentNullException.ThrowIfNull(names);
-
-        // One sheet, Sheet1 (CR1.4: unqualified or qualified refersTo). Validate everything before building anything.
         var wb = new Workbook();
-        var defs = new NameDef[names.Count];
-        var seenNames = new HashSet<string>(names.Count, StringComparer.OrdinalIgnoreCase);
-        for (int i = 0; i < names.Count; i++)
-        {
-            var (name, refersTo) = names[i];
-            defs[i] = wb.ParseName(name, refersTo, nameof(names));
-            if (!seenNames.Add(name)) throw new ArgumentException($"Duplicate name: '{name}'", nameof(names));
-        }
-
+        var defs = ParseNames(wb, names);
         var keys = new long[cells.Count];
         var seen = new HashSet<long>(cells.Count);
         for (int i = 0; i < cells.Count; i++)
@@ -91,18 +81,87 @@ public sealed partial class Workbook
             if (!seen.Add(key)) throw new ArgumentException($"Duplicate cell address: '{address}'", nameof(cells));
             keys[i] = key;
         }
+        return wb.Finish(defs, keys, cells);
+    }
 
-        foreach (var d in defs) wb.AddName(d);
-        var formulaKeys = new HashSet<long>();
-        for (int i = 0; i < cells.Count; i++)
+    /// <summary>
+    /// Builds a multi-sheet workbook (CR1.5) and runs a full recalc, raising no event. Sheets keep their order;
+    /// <paramref name="activeSheet"/> (case-insensitive) becomes active, and an unqualified <c>refersTo</c> is
+    /// qualified with it. Cell addresses are unqualified. Zero or over 255 sheets, an invalid or duplicate sheet
+    /// name, an unknown <paramref name="activeSheet"/>, or anything the single-sheet overload rejects →
+    /// <see cref="ArgumentException"/>.
+    /// </summary>
+    public static Workbook FromSnapshot(IReadOnlyList<SheetSnapshot> sheets, IReadOnlyList<KeyValuePair<string, string>> names, string activeSheet)
+    {
+        ArgumentNullException.ThrowIfNull(sheets);
+        ArgumentNullException.ThrowIfNull(names);
+        ArgumentNullException.ThrowIfNull(activeSheet);
+        if (sheets.Count == 0) throw new ArgumentException("A workbook needs at least one sheet.", nameof(sheets));
+        if (sheets.Count > Addressing.SheetNames.MaxSheets)
+            throw new ArgumentException($"A workbook has at most {Addressing.SheetNames.MaxSheets} sheets.", nameof(sheets));
+
+        var wb = new Workbook();
+        wb._sheets.Clear();
+        wb._sheetsById.Clear();
+        wb._sheetsByName.Clear();
+        wb._nextSheetId = 0;
+        foreach (var sh in sheets)
         {
-            long g = keys[i];
-            wb.Apply(g, cells[i].Value);
-            if (wb.IsFormula(g)) formulaKeys.Add(g);
+            if (sh is null) throw new ArgumentException("Null sheet.", nameof(sheets));
+            if (!Addressing.SheetNames.IsValid(sh.Name)) throw new ArgumentException($"Invalid sheet name: '{sh.Name}'", nameof(sheets));
+            if (wb._sheetsByName.ContainsKey(sh.Name)) throw new ArgumentException($"Duplicate sheet name: '{sh.Name}'", nameof(sheets));
+            ArgumentNullException.ThrowIfNull(sh.Cells);
+            wb.InstallInitialSheet(sh.Name);
         }
-        var plan = wb._planner.PlanAll(formulaKeys);
-        wb.LastRecalc = new RecalcStats(wb.Evaluate(plan, valueChanged: null));
-        return wb;
+        wb._activeId = (wb._sheetsByName.TryGetValue(activeSheet, out var act)
+            ? act : throw new ArgumentException($"Unknown sheet: '{activeSheet}'", nameof(activeSheet))).Id;
+
+        var defs = ParseNames(wb, names);
+        var all = new List<KeyValuePair<string, string>>();
+        var keyList = new List<long>();
+        var seen = new HashSet<long>();
+        foreach (var sh in sheets)
+        {
+            int id = wb._sheetsByName[sh.Name].Id;
+            foreach (var (address, input) in sh.Cells)
+            {
+                if (!CellAddress.TryParse(address, out var a)) throw new ArgumentException($"Invalid cell address: '{address}'", nameof(sheets));
+                ValidateInput(input, nameof(sheets));
+                long key = GlobalKey.Of(id, a.Key);
+                if (!seen.Add(key)) throw new ArgumentException($"Duplicate cell address: '{address}' on '{sh.Name}'", nameof(sheets));
+                keyList.Add(key);
+                all.Add(new(address, input));
+            }
+        }
+        return wb.Finish(defs, keyList.ToArray(), all);
+    }
+
+    private static NameDef[] ParseNames(Workbook wb, IReadOnlyList<KeyValuePair<string, string>> names)
+    {
+        var defs = new NameDef[names.Count];
+        var seenNames = new HashSet<string>(names.Count, StringComparer.OrdinalIgnoreCase);
+        for (int i = 0; i < names.Count; i++)
+        {
+            var (name, refersTo) = names[i];
+            defs[i] = wb.ParseName(name, refersTo, nameof(names));
+            if (!seenNames.Add(name)) throw new ArgumentException($"Duplicate name: '{name}'", nameof(names));
+        }
+        return defs;
+    }
+
+    /// <summary>Installs validated names and cells, then runs the full recalc (§6.7 "Load").</summary>
+    private Workbook Finish(NameDef[] defs, long[] keys, IReadOnlyList<KeyValuePair<string, string>> cells)
+    {
+        foreach (var d in defs) AddName(d);
+        var formulaKeys = new HashSet<long>();
+        for (int i = 0; i < keys.Length; i++)
+        {
+            Apply(keys[i], cells[i].Value);
+            if (IsFormula(keys[i])) formulaKeys.Add(keys[i]);
+        }
+        var plan = _planner.PlanAll(formulaKeys);
+        LastRecalc = new RecalcStats(Evaluate(plan, valueChanged: null));
+        return this;
     }
 
     /// <summary>

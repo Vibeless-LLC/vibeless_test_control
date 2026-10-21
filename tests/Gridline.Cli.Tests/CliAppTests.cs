@@ -71,7 +71,7 @@ public sealed class CliAppTests : IDisposable
 
         // set keeps the names (§8.1 round trip).
         Assert.Equal(0, Run("", "set", p, "B1", "1").code);
-        Assert.Contains("  \"names\": {\n    \"Rate\": \"$B$1\",\n    \"Total\": \"$B$1:$B$3\"\n  },\n", File.ReadAllText(p));
+        Assert.Contains("  \"names\": {\n    \"Rate\": \"Sheet1!$B$1\",\n    \"Total\": \"Sheet1!$B$1:$B$3\"\n  },\n", File.ReadAllText(p));
         Assert.Equal("A1\tN:2\n", Run("", "eval", p, "A1").stdout);
     }
 
