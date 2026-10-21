@@ -189,6 +189,86 @@ public class ClipboardServiceTests
     }
 
     [Fact]
+    public void Paste_SourceSheetDeletedThenSameNameAdded_UsesClipboardText_DoesNotClearTarget()
+    {
+        var (s, c, w) = Make();
+        w.AddSheet("Sheet2");
+        w.ActiveSheet = "Sheet2";
+        w.SetCell("A1", "1"); w.SetCell("B1", "=A1*2"); w.SetCell("A2", "x");
+        Assert.True(s.Copy(R("A1:B2")).Success);
+        w.ActiveSheet = "Sheet1";
+        w.DeleteSheet("Sheet2");
+        w.AddSheet("Sheet2"); // same name, new (empty) sheet
+        w.SetCell("Sheet1!C4", "old");
+        Assert.True(s.Paste(A("C4")).Success);
+        // The clipboard text ("1\t2\r\nx\t") is pasted; the empty new Sheet2 is not the source.
+        Assert.Equal("1", w.GetInput("Sheet1!C4"));
+        Assert.Equal("2", w.GetInput("Sheet1!D4")); // displayed value, not a shifted formula
+        Assert.Equal("x", w.GetInput("Sheet1!C5"));
+    }
+
+    [Fact]
+    public void Paste_SourceSheetDeletedThenUndone_UsesClipboardText()
+    {
+        var (s, c, w) = Make();
+        w.AddSheet("Sheet2");
+        w.SetCell("Sheet2!A1", "=1+1");
+        w.ActiveSheet = "Sheet2";
+        Assert.True(s.Copy(R("A1")).Success);
+        w.ActiveSheet = "Sheet1";
+        w.DeleteSheet("Sheet2");
+        w.Undo(); // the sheet comes back, but the internal source was dropped on delete
+        Assert.True(s.Paste(A("B1")).Success);
+        Assert.Equal("2", w.GetInput("Sheet1!B1")); // external text path
+    }
+
+    [Fact]
+    public void Paste_SourceSheetRenamed_FollowsSheet()
+    {
+        var (s, _, w) = Make();
+        w.AddSheet("Sheet2");
+        w.ActiveSheet = "Sheet2";
+        w.SetCell("A1", "1"); w.SetCell("B1", "=A1*2");
+        Assert.True(s.Copy(R("A1:B1")).Success);
+        w.RenameSheet("Sheet2", "Data");
+        w.ActiveSheet = "Sheet1";
+        var r = s.Paste(A("A3"));
+        Assert.True(r.Success, r.Message);
+        Assert.Equal("1", w.GetInput("Sheet1!A3"));
+        Assert.Equal("=A3*2", w.GetInput("Sheet1!B3"));
+    }
+
+    [Fact]
+    public void Paste_SourceSheetRenamedTwiceAndMoved_FollowsSheet()
+    {
+        var (s, _, w) = Make();
+        w.AddSheet("Sheet2");
+        w.AddSheet("Sheet3");
+        w.ActiveSheet = "Sheet2";
+        w.SetCell("A1", "5"); w.SetCell("B1", "=A1+1");
+        Assert.True(s.Copy(R("A1:B1")).Success);
+        w.RenameSheet("Sheet2", "Tmp");
+        w.RenameSheet("Sheet3", "Sheet2"); // another sheet now carries the old name
+        w.MoveSheet("Tmp", 0);
+        w.ActiveSheet = "Sheet1";
+        Assert.True(s.Paste(A("A3")).Success);
+        Assert.Equal("5", w.GetInput("Sheet1!A3"));
+        Assert.Equal("=A3+1", w.GetInput("Sheet1!B3"));
+    }
+
+    [Fact]
+    public void Paste_OtherSheetDeleted_SourceKept()
+    {
+        var (s, _, w) = Make();
+        w.AddSheet("Sheet2");
+        w.SetCell("A1", "1"); w.SetCell("B1", "=A1*2");
+        Assert.True(s.Copy(R("A1:B1")).Success);
+        w.DeleteSheet("Sheet2");
+        Assert.True(s.Paste(A("A3")).Success);
+        Assert.Equal("=A3*2", w.GetInput("B3"));
+    }
+
+    [Fact]
     public void WholeGridCopyPaste_Completes()
     {
         var (s, c, w) = Make();

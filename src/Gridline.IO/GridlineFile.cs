@@ -209,11 +209,9 @@ public static class GridlineFile
 
         if (version == 1)
         {
-            // Migration (CR1.5): one sheet Sheet1; unqualified refersTo are qualified with it by the active sheet.
-            var cells = ReadCells(root);
-            var migrated = new List<KeyValuePair<string, string>>(names.Count);
-            foreach (var (k, v) in names) migrated.Add(new(k, v == "#REF!" ? v : "Sheet1!" + v));
-            return Workbook.FromSnapshot(cells, migrated);
+            // Migration (CR1.5): one sheet Sheet1. Names pass through unchanged: the single-sheet FromSnapshot
+            // qualifies an unqualified refersTo with Sheet1 and accepts one already qualified with it (or #REF!).
+            return Workbook.FromSnapshot(ReadCells(root), names);
         }
 
         if (!root.TryGetProperty("activeSheet", out var activeEl) || activeEl.ValueKind != JsonValueKind.String)

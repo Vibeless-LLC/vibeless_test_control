@@ -65,6 +65,18 @@ public class GridlineFileV2Tests
         Assert.False(wb.IsDirty);
     }
 
+    [Theory]
+    [InlineData("$B$1")]
+    [InlineData("Sheet1!$B$1")]
+    [InlineData("sheet1!$B$1")]
+    public void V1_LoadMigratesNames_UnqualifiedOrAlreadyQualified(string refersTo)
+    {
+        var wb = GridlineFile.Load(System.Text.Encoding.UTF8.GetBytes(
+            "{\"format\":\"gridline\",\"version\":1,\"names\":{\"Rate\":\"" + refersTo + "\"},\"cells\":[[\"A1\",\"=Rate\"],[\"B1\",\"7\"]]}"));
+        Assert.Equal("Sheet1!$B$1", wb.GetNames()[0].Value);
+        Assert.Equal("N:7", wb.GetValue("A1").ToCanonicalString());
+    }
+
     [Fact]
     public void V1_RefNameStaysRef()
     {

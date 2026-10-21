@@ -44,6 +44,7 @@ public sealed class ClipboardService
     private RangeAddress _source;
     private string _sourceSheet = "";
     private string? _lastText;
+    private IReadOnlyList<string> _knownSheets = [];
 
     public ClipboardService(IClipboard clipboard, Func<Workbook?> workbook, Action<TimeSpan>? sleep = null)
     {
@@ -61,7 +62,7 @@ public sealed class ClipboardService
 
         if (!Try(() => _clipboard.SetText(text), out _))
             return ClipboardResult.Fail("The clipboard is busy; copy failed.");
-        _copiedFrom = wb;
+        Track(wb);
         _source = range;
         _sourceSheet = wb.ActiveSheet;
         _lastText = text;
@@ -81,8 +82,8 @@ public sealed class ClipboardService
         {
             if (_lastText is not null && _copiedFrom == wb && string.Equals(text ?? (_lastText.Length == 0 ? "" : null), _lastText, StringComparison.Ordinal))
             {
-                // The source is qualified with the sheet it was copied from, so a paste on another sheet copies across
-                // sheets (CR1.8); a source sheet renamed or deleted since the copy fails as "Cannot paste".
+                // The source is qualified with the sheet it was copied from (followed through renames; dropped when
+                // that sheet is deleted, see OnSheetsChanged), so a paste on another sheet copies across sheets (CR1.8).
                 wb.CopyPaste(SheetNames.Format(_sourceSheet) + "!" + _source, active.ToString());
                 return ClipboardResult.Ok;
             }
@@ -90,6 +91,63 @@ public sealed class ClipboardService
             return PasteExternal(wb, text, active);
         }
         catch (ArgumentException ex) { return ClipboardResult.Fail("Cannot paste: " + ex.Message); }
+    }
+
+    /// <summary>Makes <paramref name="wb"/> the copy source workbook and observes its sheet changes.</summary>
+    private void Track(Workbook wb)
+    {
+        if (_copiedFrom != wb)
+        {
+            if (_copiedFrom is not null) _copiedFrom.SheetsChanged -= OnSheetsChanged;
+            wb.SheetsChanged += OnSheetsChanged;
+            _copiedFrom = wb;
+        }
+        _knownSheets = wb.SheetNames;
+    }
+
+    /// <summary>
+    /// Keeps the internal copy source on the sheet it was copied from (CR1.8). Core raises SheetsChanged once per
+    /// sheet operation (including undo/redo), so comparing the previous and current name lists identifies it: the
+    /// same count with exactly one position renamed is a rename (the source follows it); a source name that no
+    /// longer exists means the source sheet was deleted (or its add undone), and the internal source is dropped so a
+    /// later paste uses the clipboard text (§11.6). A dropped source never comes back, so a sheet re-added (or
+    /// restored by undo) under the same name is not mistaken for it. Anything else (move, activate, another sheet
+    /// added or deleted) keeps the source.
+    /// </summary>
+    private void OnSheetsChanged(object? sender, EventArgs e)
+    {
+        if (sender != _copiedFrom || _copiedFrom is null) return;
+        var before = _knownSheets;
+        var after = _copiedFrom.SheetNames;
+        _knownSheets = after;
+        if (_lastText is null) return;
+
+        if (before.Count == after.Count)
+        {
+            int changed = -1, diffs = 0;
+            for (int i = 0; i < after.Count; i++)
+                if (!string.Equals(before[i], after[i], StringComparison.Ordinal)) { changed = i; diffs++; }
+            // One position differs with the count unchanged: a rename (a move changes at least two positions).
+            if (diffs == 1 && string.Equals(before[changed], _sourceSheet, StringComparison.OrdinalIgnoreCase))
+            {
+                _sourceSheet = after[changed]; // renamed (possibly case-only)
+                return;
+            }
+        }
+        if (!Contains(after, _sourceSheet)) DropSource();
+    }
+
+    private static bool Contains(IReadOnlyList<string> names, string name)
+    {
+        foreach (string n in names)
+            if (string.Equals(n, name, StringComparison.OrdinalIgnoreCase)) return true;
+        return false;
+    }
+
+    private void DropSource()
+    {
+        _lastText = null;
+        _sourceSheet = "";
     }
 
     private static ClipboardResult PasteExternal(Workbook wb, string text, CellAddress active)
